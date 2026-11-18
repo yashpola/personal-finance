@@ -1,0 +1,1357 @@
+(function () {
+  'use strict';
+
+  const Store = window.FinanceStore;
+  let state = Store.loadFromStorage();
+
+  const ui = {
+    activeTab: 'expenses',
+    tagFilter: 'all',
+    categoryFilter: 'all',
+    monthFilter: 'all',
+    searchFilter: '',
+    invFold: 'all',
+    editingExpenseId: null,
+    editingStockId: null
+  };
+
+  function $(id) {
+    return document.getElementById(id);
+  }
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+
+  function svgEl(tag, attrs) {
+    const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      node.setAttribute(k, String(v));
+    }
+    return node;
+  }
+
+  function formatMoney(amount) {
+    return Store.formatCurrency(amount, (state.settings && state.settings.currency) || 'SGD');
+  }
+
+  function formatSignedMoney(amount) {
+    const num = Store.roundMoney(amount);
+    const prefix = num > 0 ? '+' : '';
+    return `${prefix}${formatMoney(num)}`;
+  }
+
+  function formatShares(shares) {
+    return new Intl.NumberFormat(undefined, {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 6
+    }).format(shares);
+  }
+
+  function persistAndRender() {
+    Store.saveToStorage(state);
+    render();
+  }
+
+  /* Theme */
+  function applyTheme() {
+    const pref = (state.settings && state.settings.theme) || 'system';
+    const systemDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const effective = pref === 'system' ? (systemDark ? 'dark' : 'light') : pref;
+    document.documentElement.setAttribute('data-theme', effective);
+    const btn = $('theme-toggle');
+    if (btn) {
+      btn.textContent = effective === 'dark' ? 'Light Mode' : 'Dark Mode';
+    }
+  }
+
+  function toggleTheme() {
+    const current = document.documentElement.getAttribute('data-theme') || 'light';
+    state = {
+      ...state,
+      settings: {
+        ...state.settings,
+        theme: current === 'dark' ? 'light' : 'dark'
+      }
+    };
+    persistAndRender();
+  }
+
+  /* Currency & Category Select Initialization */
+  function initStaticControls() {
+    const currencySelect = $('currency-select');
+    currencySelect.textContent = '';
+    for (const c of Store.CURRENCIES) {
+      const opt = el('option', '', c.label);
+      opt.value = c.code;
+      currencySelect.appendChild(opt);
+    }
+    currencySelect.value = state.settings.currency || 'SGD';
+
+    const catSelect = $('expense-category');
+    const filterCat = $('filter-category');
+    catSelect.textContent = '';
+    for (const cat of Store.EXPENSE_CATEGORIES) {
+      const opt = el('option', '', cat.label);
+      opt.value = cat.id;
+      catSelect.appendChild(opt);
+
+      const fOpt = el('option', '', cat.label);
+      fOpt.value = cat.id;
+      filterCat.appendChild(fOpt);
+    }
+
+    syncSubcategoryOptions();
+    $('expense-date').value = Store.todayISO();
+    $('income-date').value = Store.todayISO();
+    $('snapshot-date').value = Store.todayISO();
+  }
+
+  function syncSubcategoryOptions(selectedSub) {
+    const catId = $('expense-category').value;
+    const cat = Store.getCategory(catId) || Store.EXPENSE_CATEGORIES[0];
+    const subSelect = $('expense-subcategory');
+    subSelect.textContent = '';
+    for (const sub of cat.subcategories) {
+      const opt = el('option', '', sub.label);
+      opt.value = sub.id;
+      subSelect.appendChild(opt);
+    }
+    if (selectedSub && cat.subcategories.some((s) => s.id === selectedSub)) {
+      subSelect.value = selectedSub;
+    }
+  }
+
+  /* Tabs */
+  function setActiveTab(tabName) {
+    ui.activeTab = tabName;
+    const tabs = document.querySelectorAll('[role="tab"]');
+    tabs.forEach((btn) => {
+      const active = btn.dataset.tab === tabName;
+      btn.classList.toggle('is-active', active);
+      btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      btn.tabIndex = active ? 0 : -1;
+    });
+
+    const panels = {
+      expenses: $('panel-expenses'),
+      investments: $('panel-investments'),
+      analysis: $('panel-analysis')
+    };
+    for (const [key, panel] of Object.entries(panels)) {
+      const show = key === tabName;
+      panel.classList.toggle('hidden', !show);
+      panel.hidden = !show;
+    }
+  }
+
+  /* Hero Rendering */
+  function renderHero(summary) {
+    const heroEl = $('hero-balance');
+    heroEl.textContent = formatMoney(summary.cashBalance);
+    heroEl.classList.toggle('is-negative', summary.cashBalance < 0);
+
+    const deduct = Boolean(state.settings.deductInvestmentsFromBalance);
+    $('balance-mode-badge').textContent = deduct ? 'After Investments' : 'Cash Available';
+
+    const baseStr = `Starting ${formatMoney(summary.baseBalance)} + Income ${formatMoney(summary.totalIncome)} − Expenses ${formatMoney(summary.totalExpenses)}`;
+    $('hero-formula').textContent = deduct
+      ? `${baseStr} − Investments ${formatMoney(summary.totalInvestments)}`
+      : baseStr;
+
+    $('metric-networth').textContent = formatMoney(summary.netWorth);
+    $('metric-expenses').textContent = formatMoney(summary.totalExpenses);
+    $('metric-expenses-sub').textContent = `${state.expenses.length} ${state.expenses.length === 1 ? 'entry' : 'entries'}`;
+    $('metric-investments').textContent = formatMoney(summary.totalInvestments);
+
+    const invCount = state.investments.bonds.length + state.investments.etfs.length + state.investments.stocks.length;
+    $('metric-investments-sub').textContent = `${invCount} ${invCount === 1 ? 'holding' : 'holdings'}`;
+
+    $('tab-expenses-count').textContent = String(state.expenses.length);
+    $('tab-investments-count').textContent = String(invCount);
+  }
+
+  /* Expenses Rendering */
+  function getFilteredExpenses() {
+    const search = ui.searchFilter.trim().toLowerCase();
+    return state.expenses.filter((exp) => {
+      if (ui.tagFilter !== 'all' && exp.tag !== ui.tagFilter) return false;
+      if (ui.categoryFilter !== 'all' && exp.category !== ui.categoryFilter) return false;
+      if (ui.monthFilter !== 'all' && !String(exp.date).startsWith(ui.monthFilter)) return false;
+      if (search) {
+        const hay = `${exp.note} ${exp.category} ${exp.subcategory} ${exp.tag}`.toLowerCase();
+        if (!hay.includes(search)) return false;
+      }
+      return true;
+    }).sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  }
+
+  function syncMonthFilterOptions() {
+    const select = $('filter-month');
+    const prev = ui.monthFilter;
+    const months = Array.from(
+      new Set(state.expenses.map((e) => String(e.date || '').slice(0, 7)).filter(Boolean))
+    ).sort().reverse();
+
+    select.textContent = '';
+    const allOpt = el('option', '', 'All Months');
+    allOpt.value = 'all';
+    select.appendChild(allOpt);
+
+    for (const ym of months) {
+      const opt = el('option', '', ym);
+      opt.value = ym;
+      select.appendChild(opt);
+    }
+
+    if (prev !== 'all' && months.includes(prev)) {
+      select.value = prev;
+    } else {
+      ui.monthFilter = 'all';
+      select.value = 'all';
+    }
+  }
+
+  function renderExpenseBreakdown(summary) {
+    const total = summary.totalExpenses;
+    const personal = summary.byTag.personal;
+    const family = summary.byTag.family;
+
+    $('total-personal').textContent = formatMoney(personal);
+    $('total-family').textContent = formatMoney(family);
+
+    if (total > 0) {
+      const pPct = Math.round((personal / total) * 100);
+      const fPct = 100 - pPct;
+      $('bar-personal').style.width = `${pPct}%`;
+      $('bar-family').style.width = `${fPct}%`;
+      $('tag-split-summary').textContent = `${pPct}% Personal • ${fPct}% Family`;
+    } else {
+      $('bar-personal').style.width = '50%';
+      $('bar-family').style.width = '50%';
+      $('tag-split-summary').textContent = 'No expenses yet';
+    }
+
+    const container = $('category-breakdown');
+    container.textContent = '';
+
+    for (const cat of Store.EXPENSE_CATEGORIES) {
+      const data = summary.byCategory[cat.id];
+      const pct = total > 0 ? Math.round((data.total / total) * 100) : 0;
+
+      const row = el('div', 'cat-row');
+
+      const top = el('div', 'cat-row-top');
+      const left = el('span', 'cat-name-wrap');
+      const dot = el('i', 'dot');
+      dot.style.backgroundColor = cat.color;
+      left.appendChild(dot);
+      left.appendChild(document.createTextNode(cat.label));
+
+      const right = el('span', 'tabular-nums', `${formatMoney(data.total)} (${pct}%)`);
+      top.appendChild(left);
+      top.appendChild(right);
+
+      const track = el('div', 'cat-track');
+      const fill = el('div', 'cat-fill');
+      fill.style.width = `${pct}%`;
+      fill.style.backgroundColor = cat.color;
+      track.appendChild(fill);
+
+      const subs = el('div', 'cat-subs');
+      for (const sub of cat.subcategories) {
+        const subAmt = data.subcategories[sub.id] || 0;
+        subs.appendChild(el('span', 'sub-chip tabular-nums', `${sub.label}: ${formatMoney(subAmt)}`));
+      }
+
+      row.appendChild(top);
+      row.appendChild(track);
+      row.appendChild(subs);
+      container.appendChild(row);
+    }
+  }
+
+  function renderExpenseList() {
+    syncMonthFilterOptions();
+    const list = $('expense-list');
+    list.textContent = '';
+    const filtered = getFilteredExpenses();
+    const filteredTotal = filtered.reduce((sum, e) => sum + e.amount, 0);
+
+    $('expense-filter-summary').textContent = `${filtered.length} ${filtered.length === 1 ? 'expense' : 'expenses'} • ${formatMoney(filteredTotal)}`;
+
+    if (filtered.length === 0) {
+      list.appendChild(el('div', 'empty-state', 'No expenses match your filters yet.'));
+      return;
+    }
+
+    for (const exp of filtered) {
+      const cat = Store.getCategory(exp.category);
+      const sub = cat ? cat.subcategories.find((s) => s.id === exp.subcategory) : null;
+
+      const row = el('div', 'item-row');
+      const main = el('div', 'item-main');
+
+      const titleLine = el('div', 'item-title-line');
+      const dot = el('i', 'dot');
+      dot.style.backgroundColor = cat ? cat.color : '#64748b';
+      titleLine.appendChild(dot);
+      titleLine.appendChild(document.createTextNode(`${cat ? cat.label : exp.category} · ${sub ? sub.label : exp.subcategory}`));
+
+      const tagBadge = el(
+        'span',
+        `tag-badge ${exp.tag === 'family' ? 'tag-family' : 'tag-personal'}`,
+        exp.tag === 'family' ? 'Family' : 'Personal'
+      );
+      titleLine.appendChild(tagBadge);
+
+      const metaText = exp.note ? `${exp.date} • ${exp.note}` : exp.date;
+      const meta = el('div', 'item-meta', metaText);
+
+      main.appendChild(titleLine);
+      main.appendChild(meta);
+
+      const right = el('div', 'item-right');
+      right.appendChild(el('span', 'item-amount tabular-nums', `−${formatMoney(exp.amount)}`));
+
+      const actions = el('div', 'item-actions');
+      const editBtn = el('button', 'btn btn-ghost btn-xs', 'Edit');
+      editBtn.type = 'button';
+      editBtn.addEventListener('click', () => startEditExpense(exp));
+
+      const delBtn = el('button', 'btn btn-ghost btn-xs', 'Delete');
+      delBtn.type = 'button';
+      delBtn.addEventListener('click', () => {
+        if (ui.editingExpenseId === exp.id) cancelEditExpense();
+        state = Store.deleteExpense(state, exp.id);
+        persistAndRender();
+      });
+
+      actions.appendChild(editBtn);
+      actions.appendChild(delBtn);
+      right.appendChild(actions);
+
+      row.appendChild(main);
+      row.appendChild(right);
+      list.appendChild(row);
+    }
+  }
+
+  function startEditExpense(exp) {
+    ui.editingExpenseId = exp.id;
+    $('expense-edit-id').value = exp.id;
+    $('expense-amount').value = exp.amount;
+    $('expense-date').value = exp.date;
+    $('expense-category').value = exp.category;
+    syncSubcategoryOptions(exp.subcategory);
+    const tagRadio = document.querySelector(`input[name="tag"][value="${exp.tag}"]`);
+    if (tagRadio) tagRadio.checked = true;
+    $('expense-note').value = exp.note || '';
+    $('expense-form-title').textContent = 'Edit Expense';
+    $('expense-submit-btn').textContent = 'Save Changes';
+    $('cancel-edit-expense').classList.remove('hidden');
+    $('expense-amount').focus();
+  }
+
+  function cancelEditExpense() {
+    ui.editingExpenseId = null;
+    $('expense-edit-id').value = '';
+    $('expense-form').reset();
+    $('expense-date').value = Store.todayISO();
+    syncSubcategoryOptions();
+    $('expense-form-title').textContent = 'Log Expense';
+    $('expense-submit-btn').textContent = 'Add Expense';
+    $('cancel-edit-expense').classList.add('hidden');
+  }
+
+  /* Investments Rendering */
+  function renderInvestments(summary) {
+    const total = summary.totalInvestments;
+    const bondsPct = total > 0 ? Math.round((summary.totalBonds / total) * 100) : 0;
+    const etfsPct = total > 0 ? Math.round((summary.totalEtfs / total) * 100) : 0;
+    const stocksPct = total > 0 ? Math.max(0, 100 - bondsPct - etfsPct) : 0;
+
+    $('bar-bonds').style.width = `${bondsPct}%`;
+    $('bar-etfs').style.width = `${etfsPct}%`;
+    $('bar-stocks').style.width = `${stocksPct}%`;
+
+    $('inv-total-bonds').textContent = formatMoney(summary.totalBonds);
+    $('inv-pct-bonds').textContent = `${bondsPct}%`;
+    $('inv-total-etfs').textContent = formatMoney(summary.totalEtfs);
+    $('inv-pct-etfs').textContent = `${etfsPct}%`;
+    $('inv-total-stocks').textContent = formatMoney(summary.totalStocks);
+    $('inv-pct-stocks').textContent = `${stocksPct}%`;
+
+    $('bonds-badge-total').textContent = formatMoney(summary.totalBonds);
+    $('etfs-badge-total').textContent = formatMoney(summary.totalEtfs);
+    $('stocks-badge-total').textContent = formatMoney(summary.totalStocks);
+
+    const grid = document.querySelector('.investments-grid');
+    grid.classList.toggle('is-focused', ui.invFold !== 'all');
+    $('fold-bonds').classList.toggle('hidden', ui.invFold !== 'all' && ui.invFold !== 'bonds');
+    $('fold-etfs').classList.toggle('hidden', ui.invFold !== 'all' && ui.invFold !== 'etfs');
+    $('fold-stocks').classList.toggle('hidden', ui.invFold !== 'all' && ui.invFold !== 'stocks');
+
+    document.querySelectorAll('[data-inv-fold]').forEach((btn) => {
+      btn.classList.toggle('is-active', btn.dataset.invFold === ui.invFold);
+    });
+    document.querySelectorAll('[data-inv-fold-card]').forEach((card) => {
+      card.classList.toggle('is-active', card.dataset.invFoldCard === ui.invFold);
+    });
+
+    renderBondsList();
+    renderEtfsList();
+    renderStocksList();
+  }
+
+  function renderBondsList() {
+    const list = $('bonds-list');
+    list.textContent = '';
+    if (state.investments.bonds.length === 0) {
+      list.appendChild(el('div', 'empty-state', 'No bonds added yet.'));
+      return;
+    }
+
+    for (const bond of state.investments.bonds) {
+      const row = el('div', 'item-row');
+      const main = el('div', 'item-main');
+      const title = el('div', 'item-title-line', bond.name);
+      if (bond.yieldRate !== null) {
+        title.appendChild(el('span', 'pill-badge tabular-nums', `${bond.yieldRate}% yield`));
+      }
+      const metaParts = [];
+      if (bond.maturityDate) metaParts.push(`Matures ${bond.maturityDate}`);
+      if (bond.note) metaParts.push(bond.note);
+      main.appendChild(title);
+      if (metaParts.length > 0) {
+        main.appendChild(el('div', 'item-meta', metaParts.join(' • ')));
+      }
+
+      const right = el('div', 'item-right');
+      right.appendChild(el('span', 'item-amount tabular-nums', formatMoney(bond.amount)));
+      const delBtn = el('button', 'btn btn-ghost btn-xs', 'Delete');
+      delBtn.type = 'button';
+      delBtn.addEventListener('click', () => {
+        state = Store.deleteBond(state, bond.id);
+        persistAndRender();
+      });
+      right.appendChild(delBtn);
+
+      row.appendChild(main);
+      row.appendChild(right);
+      list.appendChild(row);
+    }
+  }
+
+  function renderEtfsList() {
+    const list = $('etfs-list');
+    list.textContent = '';
+    if (state.investments.etfs.length === 0) {
+      list.appendChild(el('div', 'empty-state', 'No ETFs added yet.'));
+      return;
+    }
+
+    for (const etf of state.investments.etfs) {
+      const card = el('div', 'etf-card');
+      const header = el('div', 'etf-card-header');
+
+      const cost = Store.getEtfTotal(etf);
+      const currentVal = Store.getEtfCurrentValue(etf);
+      const gain = Store.roundMoney(currentVal - cost);
+      const gainPct = cost > 0 ? Math.round((gain / cost) * 1000) / 10 : 0;
+
+      const left = el('div', 'item-main');
+      const titleLine = el('div', 'item-title-line', etf.name);
+      if (etf.ticker) {
+        titleLine.appendChild(el('span', 'pill-badge', etf.ticker));
+      }
+      left.appendChild(titleLine);
+
+      const metaStr = `${etf.funds.length} ${etf.funds.length === 1 ? 'fund' : 'funds'} • Invested ${formatMoney(cost)}`;
+      left.appendChild(el('div', 'item-meta tabular-nums', metaStr));
+
+      const right = el('div', 'item-right');
+      right.appendChild(el('span', 'item-amount tabular-nums', formatMoney(currentVal)));
+      const delEtfBtn = el('button', 'btn btn-ghost btn-xs', 'Remove');
+      delEtfBtn.type = 'button';
+      delEtfBtn.addEventListener('click', () => {
+        state = Store.deleteEtf(state, etf.id);
+        persistAndRender();
+      });
+      right.appendChild(delEtfBtn);
+
+      header.appendChild(left);
+      header.appendChild(right);
+      card.appendChild(header);
+
+      const valRow = el('div', 'etf-value-row');
+      const gainSpan = el(
+        'span',
+        gain > 0 ? 'gain-positive tabular-nums' : gain < 0 ? 'gain-negative tabular-nums' : 'muted tabular-nums',
+        gain === 0 ? 'Market value = Invested' : `Gain: ${formatSignedMoney(gain)} (${gain > 0 ? '+' : ''}${gainPct}%)`
+      );
+      const valForm = el('form', 'etf-value-form');
+      const valInput = el('input');
+      valInput.type = 'number';
+      valInput.step = '0.01';
+      valInput.min = '0';
+      valInput.placeholder = 'Market val';
+      valInput.value = etf.currentValue !== null && etf.currentValue !== undefined ? etf.currentValue : '';
+      valInput.setAttribute('aria-label', `Current market value for ${etf.name}`);
+      const valBtn = el('button', 'btn btn-secondary btn-xs', 'Update Val');
+      valBtn.type = 'submit';
+      valForm.appendChild(valInput);
+      valForm.appendChild(valBtn);
+      valForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        state = Store.setEtfCurrentValue(state, etf.id, valInput.value);
+        persistAndRender();
+      });
+      valRow.appendChild(gainSpan);
+      valRow.appendChild(valForm);
+      card.appendChild(valRow);
+
+      const fundsWrap = el('div', 'etf-funds-list');
+      if (etf.funds.length === 0) {
+        fundsWrap.appendChild(el('div', 'muted', 'No funds logged in this ETF yet. Add funds below.'));
+      } else {
+        for (const fund of etf.funds) {
+          const fRow = el('div', 'etf-fund-row');
+          const fInfo = el('span', '', `${fund.label} (${fund.date})`);
+          const fRight = el('span', 'item-right');
+          fRight.appendChild(el('strong', 'tabular-nums', formatMoney(fund.amount)));
+          const delFundBtn = el('button', 'btn btn-ghost btn-xs', '✕');
+          delFundBtn.type = 'button';
+          delFundBtn.setAttribute('aria-label', `Remove fund ${fund.label}`);
+          delFundBtn.addEventListener('click', () => {
+            state = Store.deleteEtfFund(state, etf.id, fund.id);
+            persistAndRender();
+          });
+          fRight.appendChild(delFundBtn);
+          fRow.appendChild(fInfo);
+          fRow.appendChild(fRight);
+          fundsWrap.appendChild(fRow);
+        }
+      }
+      card.appendChild(fundsWrap);
+
+      const addFundForm = el('form', 'etf-add-fund-form');
+      const labelInput = el('input');
+      labelInput.type = 'text';
+      labelInput.placeholder = 'Fund / tranche label';
+      labelInput.required = true;
+      labelInput.setAttribute('aria-label', `Fund label for ${etf.name}`);
+
+      const amtInput = el('input');
+      amtInput.type = 'number';
+      amtInput.step = '0.01';
+      amtInput.min = '0.01';
+      amtInput.placeholder = 'Amount';
+      amtInput.required = true;
+      amtInput.setAttribute('aria-label', `Fund amount for ${etf.name}`);
+
+      const addBtn = el('button', 'btn btn-secondary btn-xs', '+ Add Funds');
+      addBtn.type = 'submit';
+
+      addFundForm.appendChild(labelInput);
+      addFundForm.appendChild(amtInput);
+      addFundForm.appendChild(addBtn);
+
+      addFundForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        state = Store.addEtfFund(state, etf.id, {
+          label: labelInput.value,
+          amount: amtInput.value,
+          date: Store.todayISO()
+        });
+        persistAndRender();
+      });
+
+      card.appendChild(addFundForm);
+      list.appendChild(card);
+    }
+  }
+
+  function renderStocksList() {
+    const list = $('stocks-list');
+    list.textContent = '';
+    if (state.investments.stocks.length === 0) {
+      list.appendChild(el('div', 'empty-state', 'No stocks added yet.'));
+      return;
+    }
+
+    for (const stock of state.investments.stocks) {
+      const row = el('div', 'item-row');
+      const main = el('div', 'item-main');
+
+      const titleLine = el('div', 'item-title-line', stock.company);
+      if (stock.ticker) {
+        titleLine.appendChild(el('span', 'pill-badge', stock.ticker));
+      }
+
+      const curTotal = Store.getStockTotal(stock);
+      const costTotal = Store.getStockCostBasis(stock);
+      const gain = Store.roundMoney(curTotal - costTotal);
+      let sharesText = `${formatShares(stock.shares)} ${stock.shares === 1 ? 'share' : 'shares'} @ ${formatMoney(stock.pricePerShare)}`;
+      if (stock.buyPrice !== null && stock.buyPrice !== undefined && gain !== 0) {
+        const gainPct = costTotal > 0 ? Math.round((gain / costTotal) * 1000) / 10 : 0;
+        sharesText += ` • ${formatSignedMoney(gain)} (${gain > 0 ? '+' : ''}${gainPct}%)`;
+      }
+
+      main.appendChild(titleLine);
+      main.appendChild(el('div', 'item-meta tabular-nums', sharesText));
+
+      const right = el('div', 'item-right');
+      right.appendChild(el('span', 'item-amount tabular-nums', formatMoney(curTotal)));
+
+      const actions = el('div', 'item-actions');
+      const editBtn = el('button', 'btn btn-ghost btn-xs', 'Edit');
+      editBtn.type = 'button';
+      editBtn.addEventListener('click', () => startEditStock(stock));
+
+      const delBtn = el('button', 'btn btn-ghost btn-xs', 'Delete');
+      delBtn.type = 'button';
+      delBtn.addEventListener('click', () => {
+        if (ui.editingStockId === stock.id) cancelEditStock();
+        state = Store.deleteStock(state, stock.id);
+        persistAndRender();
+      });
+
+      actions.appendChild(editBtn);
+      actions.appendChild(delBtn);
+      right.appendChild(actions);
+
+      row.appendChild(main);
+      row.appendChild(right);
+      list.appendChild(row);
+    }
+  }
+
+  function updateStockPreview() {
+    const shares = Number($('stock-shares').value);
+    const price = Number($('stock-price').value);
+    const total = Number.isFinite(shares) && shares > 0 && Number.isFinite(price) && price >= 0
+      ? Store.roundMoney(shares * price)
+      : 0;
+    $('stock-preview-total').textContent = formatMoney(total);
+  }
+
+  function startEditStock(stock) {
+    ui.editingStockId = stock.id;
+    $('stock-edit-id').value = stock.id;
+    $('stock-company').value = stock.company;
+    $('stock-ticker').value = stock.ticker || '';
+    $('stock-shares').value = stock.shares;
+    $('stock-price').value = stock.pricePerShare;
+    $('stock-buy-price').value = stock.buyPrice !== null && stock.buyPrice !== undefined ? stock.buyPrice : '';
+    $('stock-submit-btn').textContent = 'Save Stock';
+    $('cancel-edit-stock').classList.remove('hidden');
+    updateStockPreview();
+    $('stock-shares').focus();
+  }
+
+  function cancelEditStock() {
+    ui.editingStockId = null;
+    $('stock-edit-id').value = '';
+    $('stock-form').reset();
+    $('stock-submit-btn').textContent = 'Add Stock';
+    $('cancel-edit-stock').classList.add('hidden');
+    updateStockPreview();
+  }
+
+  /* Analysis Rendering */
+  function renderGrowthChart(snapshots) {
+    const wrap = $('growth-chart-wrap');
+    wrap.textContent = '';
+
+    if (snapshots.length === 0) {
+      wrap.appendChild(el('div', 'empty-state', 'No snapshots yet. Click "Record Today\'s Snapshot" or add historical checkpoints below to track growth over time.'));
+      return;
+    }
+
+    const width = 680;
+    const height = 210;
+    const padL = 68;
+    const padR = 24;
+    const padT = 20;
+    const padB = 34;
+    const innerW = width - padL - padR;
+    const innerH = height - padT - padB;
+
+    const values = snapshots.map((s) => s.total);
+    let minVal = Math.min(...values);
+    let maxVal = Math.max(...values);
+    if (minVal === maxVal) {
+      minVal = Math.max(0, minVal * 0.9);
+      maxVal = maxVal === 0 ? 100 : maxVal * 1.1;
+    } else {
+      const span = maxVal - minVal;
+      minVal = Math.max(0, minVal - span * 0.12);
+      maxVal = maxVal + span * 0.12;
+    }
+
+    const svg = svgEl('svg', {
+      viewBox: `0 0 ${width} ${height}`,
+      class: 'growth-svg',
+      role: 'img',
+      'aria-label': 'Portfolio value growth chart'
+    });
+
+    const defs = svgEl('defs');
+    const grad = svgEl('linearGradient', { id: 'growthGrad', x1: '0', y1: '0', x2: '0', y2: '1' });
+    grad.appendChild(svgEl('stop', { offset: '0%', 'stop-color': '#10b981', 'stop-opacity': '0.32' }));
+    grad.appendChild(svgEl('stop', { offset: '100%', 'stop-color': '#10b981', 'stop-opacity': '0.02' }));
+    defs.appendChild(grad);
+    svg.appendChild(defs);
+
+    const gridSteps = 3;
+    for (let i = 0; i <= gridSteps; i += 1) {
+      const frac = i / gridSteps;
+      const y = padT + innerH * (1 - frac);
+      const val = minVal + (maxVal - minVal) * frac;
+      svg.appendChild(svgEl('line', {
+        x1: padL,
+        y1: y,
+        x2: width - padR,
+        y2: y,
+        stroke: 'currentColor',
+        'stroke-opacity': '0.12',
+        'stroke-dasharray': i === 0 ? 'none' : '3 3'
+      }));
+      const lbl = svgEl('text', {
+        x: padL - 8,
+        y: y + 4,
+        'text-anchor': 'end',
+        'font-size': '11',
+        fill: 'currentColor',
+        opacity: '0.65'
+      });
+      lbl.textContent = formatMoney(val);
+      svg.appendChild(lbl);
+    }
+
+    const coords = snapshots.map((s, idx) => {
+      const x = snapshots.length === 1
+        ? padL + innerW / 2
+        : padL + (idx / (snapshots.length - 1)) * innerW;
+      const y = padT + innerH - ((s.total - minVal) / (maxVal - minVal)) * innerH;
+      return { x, y, snap: s };
+    });
+
+    if (coords.length >= 2) {
+      const lineD = coords.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+      const areaD = `${lineD} L ${coords[coords.length - 1].x.toFixed(1)} ${(padT + innerH).toFixed(1)} L ${coords[0].x.toFixed(1)} ${(padT + innerH).toFixed(1)} Z`;
+      svg.appendChild(svgEl('path', { d: areaD, fill: 'url(#growthGrad)' }));
+      svg.appendChild(svgEl('path', {
+        d: lineD,
+        fill: 'none',
+        stroke: '#10b981',
+        'stroke-width': '2.5',
+        'stroke-linecap': 'round',
+        'stroke-linejoin': 'round'
+      }));
+    }
+
+    coords.forEach((p, idx) => {
+      const circle = svgEl('circle', {
+        cx: p.x,
+        cy: p.y,
+        r: '4.5',
+        fill: '#10b981',
+        stroke: '#ffffff',
+        'stroke-width': '1.5'
+      });
+      const title = svgEl('title');
+      title.textContent = `${p.snap.date}: ${formatMoney(p.snap.total)}${p.snap.note ? ` (${p.snap.note})` : ''}`;
+      circle.appendChild(title);
+      svg.appendChild(circle);
+
+      if (coords.length <= 8 || idx === 0 || idx === coords.length - 1 || idx % Math.ceil(coords.length / 5) === 0) {
+        const xLbl = svgEl('text', {
+          x: p.x,
+          y: height - 10,
+          'text-anchor': 'middle',
+          'font-size': '11',
+          fill: 'currentColor',
+          opacity: '0.68'
+        });
+        xLbl.textContent = p.snap.date.slice(2);
+        svg.appendChild(xLbl);
+      }
+    });
+
+    wrap.appendChild(svg);
+  }
+
+  function renderAnalysis() {
+    const an = Store.computeAnalysis(state);
+    const { summary } = an;
+
+    // Expense KPIs
+    $('an-avg-expense').textContent = formatMoney(an.averageExpense);
+    $('an-expense-count').textContent = `${an.expenseCount} ${an.expenseCount === 1 ? 'entry' : 'entries'}`;
+
+    if (an.topCategory) {
+      $('an-top-category').textContent = an.topCategory.label;
+      $('an-top-category-sub').textContent = `${formatMoney(an.topCategory.total)} (${an.topCategory.sharePct}%)`;
+    } else {
+      $('an-top-category').textContent = '—';
+      $('an-top-category-sub').textContent = 'No expenses yet';
+    }
+
+    if (an.topSubcategory) {
+      $('an-top-subcategory').textContent = an.topSubcategory.label;
+      $('an-top-subcategory-sub').textContent = `${an.topSubcategory.categoryLabel} • ${formatMoney(an.topSubcategory.total)}`;
+    } else {
+      $('an-top-subcategory').textContent = '—';
+      $('an-top-subcategory-sub').textContent = 'No expenses yet';
+    }
+
+    const cfEl = $('an-net-cashflow');
+    cfEl.textContent = formatSignedMoney(an.netCashFlow);
+    cfEl.className = `metric-value tabular-nums ${an.netCashFlow >= 0 ? 'metric-accent' : 'metric-danger'}`;
+    $('an-savings-rate').textContent = an.savingsRate !== null
+      ? `Savings rate: ${an.savingsRate}%`
+      : 'Add income to see savings rate';
+
+    // Category Summary Table
+    const catTableWrap = $('analysis-category-table');
+    catTableWrap.textContent = '';
+    const table = el('table', 'data-table');
+    const thead = el('thead');
+    const hRow = el('tr');
+    ['Category', 'Entries', 'Personal', 'Family', 'Total', 'Share', 'Top Subcategory'].forEach((h, i) => {
+      const th = el('th', i >= 1 && i <= 5 ? 'num' : '', h);
+      hRow.appendChild(th);
+    });
+    thead.appendChild(hRow);
+    table.appendChild(thead);
+
+    const tbody = el('tbody');
+    for (const row of an.categoryMatrix) {
+      const tr = el('tr');
+
+      const nameTd = el('td');
+      const nameWrap = el('span', 'cat-name-wrap');
+      const dot = el('i', 'dot');
+      dot.style.backgroundColor = row.color;
+      nameWrap.appendChild(dot);
+      nameWrap.appendChild(document.createTextNode(row.label));
+      nameTd.appendChild(nameWrap);
+
+      const topSub = row.subcategories[0] && row.subcategories[0].total > 0
+        ? `${row.subcategories[0].label} (${formatMoney(row.subcategories[0].total)})`
+        : '—';
+
+      tr.appendChild(nameTd);
+      tr.appendChild(el('td', 'num tabular-nums', row.count));
+      tr.appendChild(el('td', 'num tabular-nums', formatMoney(row.personal)));
+      tr.appendChild(el('td', 'num tabular-nums', formatMoney(row.family)));
+      tr.appendChild(el('td', 'num tabular-nums', formatMoney(row.total)));
+      tr.appendChild(el('td', 'num tabular-nums', `${row.sharePct}%`));
+      tr.appendChild(el('td', 'muted tabular-nums', topSub));
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    catTableWrap.appendChild(table);
+
+    // Monthly Spending Trend
+    const monthlyWrap = $('analysis-monthly-trend');
+    monthlyWrap.textContent = '';
+    if (an.monthlyExpenses.length === 0) {
+      monthlyWrap.appendChild(el('div', 'empty-state', 'Add expenses to see monthly spending trends.'));
+    } else {
+      const maxMonth = Math.max(...an.monthlyExpenses.map((m) => m.total), 1);
+      for (const m of an.monthlyExpenses) {
+        const row = el('div', 'month-bar-row');
+        row.appendChild(el('span', 'tabular-nums', m.month));
+
+        const track = el('div', 'month-track');
+        const pWidth = (m.personal / maxMonth) * 100;
+        const fWidth = (m.family / maxMonth) * 100;
+        const pBar = el('div', 'bar-segment bar-personal');
+        pBar.style.width = `${pWidth}%`;
+        const fBar = el('div', 'bar-segment bar-family');
+        fBar.style.width = `${fWidth}%`;
+        track.appendChild(pBar);
+        track.appendChild(fBar);
+
+        row.appendChild(track);
+        row.appendChild(el('strong', 'tabular-nums', formatMoney(m.total)));
+        monthlyWrap.appendChild(row);
+      }
+    }
+
+    // Investment Growth KPIs
+    $('an-inv-current').textContent = formatMoney(summary.totalInvestments);
+    $('an-inv-cost').textContent = `Invested: ${formatMoney(summary.totalInvestmentsCost)}`;
+
+    const inv = an.investments;
+    const gainEl = $('an-inv-gain');
+    gainEl.textContent = formatSignedMoney(inv.totalUnrealizedGain);
+    gainEl.className = `metric-value tabular-nums ${inv.totalUnrealizedGain >= 0 ? 'metric-accent' : 'metric-danger'}`;
+    $('an-inv-gain-pct').textContent = `${inv.totalUnrealizedGain >= 0 ? '+' : ''}${inv.totalUnrealizedGainPct}% vs cost basis`;
+
+    const snapEl = $('an-snap-growth');
+    if (inv.snapshotGrowth) {
+      snapEl.textContent = formatSignedMoney(inv.snapshotGrowth.delta);
+      snapEl.className = `metric-value tabular-nums ${inv.snapshotGrowth.delta >= 0 ? 'metric-accent' : 'metric-danger'}`;
+      $('an-snap-range').textContent = `${inv.snapshotGrowth.pct >= 0 ? '+' : ''}${inv.snapshotGrowth.pct}% (${inv.snapshotGrowth.startDate} → ${inv.snapshotGrowth.endDate})`;
+      $('an-chart-subtitle').textContent = `${inv.snapshots.length} ${inv.snapshots.length === 1 ? 'snapshot' : 'snapshots'} logged`;
+    } else {
+      snapEl.textContent = '—';
+      snapEl.className = 'metric-value tabular-nums';
+      $('an-snap-range').textContent = 'Record snapshots below';
+      $('an-chart-subtitle').textContent = 'Record snapshots to plot growth';
+    }
+
+    $('an-bond-yield').textContent = formatMoney(inv.projectedAnnualBondIncome);
+
+    renderGrowthChart(inv.snapshots);
+
+    // 3-Fold Investment Growth Table
+    const invTableWrap = $('analysis-investment-table');
+    invTableWrap.textContent = '';
+    const invTable = el('table', 'data-table');
+    const invHead = el('thead');
+    const invHRow = el('tr');
+    ['Asset Class', 'Holdings', 'Invested Cost', 'Current Value', 'Gain / Loss', 'Allocation'].forEach((h, i) => {
+      invHRow.appendChild(el('th', i >= 1 ? 'num' : '', h));
+    });
+    invHead.appendChild(invHRow);
+    invTable.appendChild(invHead);
+
+    const totalInv = summary.totalInvestments;
+    const rowsData = [
+      {
+        label: 'Bonds',
+        dotClass: 'dot-bonds',
+        count: state.investments.bonds.length,
+        cost: summary.totalBonds,
+        value: summary.totalBonds,
+        gain: 0,
+        gainPct: 0
+      },
+      {
+        label: 'ETFs',
+        dotClass: 'dot-etfs',
+        count: state.investments.etfs.length,
+        cost: summary.totalEtfsCost,
+        value: summary.totalEtfs,
+        gain: inv.etfsGain,
+        gainPct: inv.etfsGainPct
+      },
+      {
+        label: 'Stocks',
+        dotClass: 'dot-stocks',
+        count: state.investments.stocks.length,
+        cost: summary.totalStocksCost,
+        value: summary.totalStocks,
+        gain: inv.stocksGain,
+        gainPct: inv.stocksGainPct
+      }
+    ];
+
+    const invBody = el('tbody');
+    for (const r of rowsData) {
+      const tr = el('tr');
+      const labelTd = el('td');
+      const wrap = el('span', 'cat-name-wrap');
+      wrap.appendChild(el('i', `dot ${r.dotClass}`));
+      wrap.appendChild(document.createTextNode(r.label));
+      labelTd.appendChild(wrap);
+
+      const allocPct = totalInv > 0 ? Math.round((r.value / totalInv) * 1000) / 10 : 0;
+      const gainText = `${formatSignedMoney(r.gain)} (${r.gain >= 0 ? '+' : ''}${r.gainPct}%)`;
+      const gainClass = `num tabular-nums ${r.gain > 0 ? 'gain-positive' : r.gain < 0 ? 'gain-negative' : ''}`;
+
+      tr.appendChild(labelTd);
+      tr.appendChild(el('td', 'num tabular-nums', r.count));
+      tr.appendChild(el('td', 'num tabular-nums', formatMoney(r.cost)));
+      tr.appendChild(el('td', 'num tabular-nums', formatMoney(r.value)));
+      tr.appendChild(el('td', gainClass, gainText));
+      tr.appendChild(el('td', 'num tabular-nums', `${allocPct}%`));
+      invBody.appendChild(tr);
+    }
+    invTable.appendChild(invBody);
+    invTableWrap.appendChild(invTable);
+
+    // Snapshot History List
+    const snapList = $('snapshot-list');
+    snapList.textContent = '';
+    const descSnaps = inv.snapshots.slice().reverse();
+    for (const snap of descSnaps) {
+      const row = el('div', 'item-row');
+      const main = el('div', 'item-main');
+      main.appendChild(el('div', 'item-title-line tabular-nums', `${snap.date}${snap.note ? ` • ${snap.note}` : ''}`));
+      if (snap.bonds || snap.etfs || snap.stocks) {
+        main.appendChild(el(
+          'div',
+          'item-meta tabular-nums',
+          `Bonds ${formatMoney(snap.bonds)} • ETFs ${formatMoney(snap.etfs)} • Stocks ${formatMoney(snap.stocks)}`
+        ));
+      }
+      const right = el('div', 'item-right');
+      right.appendChild(el('span', 'item-amount tabular-nums', formatMoney(snap.total)));
+      const delBtn = el('button', 'btn btn-ghost btn-xs', 'Delete');
+      delBtn.type = 'button';
+      delBtn.addEventListener('click', () => {
+        state = Store.deleteInvestmentSnapshot(state, snap.id);
+        persistAndRender();
+      });
+      right.appendChild(delBtn);
+      row.appendChild(main);
+      row.appendChild(right);
+      snapList.appendChild(row);
+    }
+  }
+
+  /* Balance & Income Dialog */
+  function renderBalanceDialog() {
+    $('base-balance-input').value = state.balance.baseAmount;
+    $('deduct-investments-toggle').checked = Boolean(state.settings.deductInvestmentsFromBalance);
+
+    const list = $('income-list');
+    list.textContent = '';
+    if (state.balance.incomes.length === 0) {
+      list.appendChild(el('div', 'empty-state', 'No income entries logged yet.'));
+      return;
+    }
+
+    for (const inc of state.balance.incomes) {
+      const row = el('div', 'item-row');
+      const main = el('div', 'item-main');
+      main.appendChild(el('div', 'item-title-line', inc.label));
+      main.appendChild(el('div', 'item-meta', inc.date));
+
+      const right = el('div', 'item-right');
+      right.appendChild(el('span', 'item-amount metric-accent tabular-nums', `+${formatMoney(inc.amount)}`));
+      const delBtn = el('button', 'btn btn-ghost btn-xs', 'Delete');
+      delBtn.type = 'button';
+      delBtn.addEventListener('click', () => {
+        state = Store.deleteIncome(state, inc.id);
+        persistAndRender();
+      });
+      right.appendChild(delBtn);
+
+      row.appendChild(main);
+      row.appendChild(right);
+      list.appendChild(row);
+    }
+  }
+
+  function showDataFeedback(msg, isError) {
+    const box = $('data-feedback');
+    box.textContent = msg;
+    box.classList.remove('hidden', 'is-error');
+    if (isError) box.classList.add('is-error');
+  }
+
+  function downloadFile(filename, content, mime) {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function render() {
+    applyTheme();
+    $('currency-select').value = state.settings.currency || 'SGD';
+    const summary = Store.computeSummary(state);
+    renderHero(summary);
+    renderExpenseBreakdown(summary);
+    renderExpenseList();
+    renderInvestments(summary);
+    renderAnalysis();
+    renderBalanceDialog();
+  }
+
+  /* Event Bindings */
+  function bindEvents() {
+    $('currency-select').addEventListener('change', (e) => {
+      state = {
+        ...state,
+        settings: { ...state.settings, currency: e.target.value }
+      };
+      persistAndRender();
+    });
+
+    $('theme-toggle').addEventListener('click', toggleTheme);
+
+    // Tabs + keyboard arrow navigation
+    const tabBtns = Array.from(document.querySelectorAll('[role="tab"]'));
+    tabBtns.forEach((btn, idx) => {
+      btn.addEventListener('click', () => setActiveTab(btn.dataset.tab));
+      btn.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+          e.preventDefault();
+          const nextIdx = e.key === 'ArrowRight'
+            ? (idx + 1) % tabBtns.length
+            : (idx - 1 + tabBtns.length) % tabBtns.length;
+          tabBtns[nextIdx].focus();
+          setActiveTab(tabBtns[nextIdx].dataset.tab);
+        }
+      });
+    });
+
+    // Expense Form
+    $('expense-category').addEventListener('change', () => syncSubcategoryOptions());
+    $('cancel-edit-expense').addEventListener('click', cancelEditExpense);
+    $('expense-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const tagChecked = document.querySelector('input[name="tag"]:checked');
+      const payload = {
+        amount: $('expense-amount').value,
+        date: $('expense-date').value,
+        category: $('expense-category').value,
+        subcategory: $('expense-subcategory').value,
+        tag: tagChecked ? tagChecked.value : 'personal',
+        note: $('expense-note').value
+      };
+
+      if (ui.editingExpenseId) {
+        state = Store.updateExpense(state, ui.editingExpenseId, payload);
+        cancelEditExpense();
+      } else {
+        state = Store.addExpense(state, payload);
+        $('expense-amount').value = '';
+        $('expense-note').value = '';
+      }
+      persistAndRender();
+    });
+
+    // Expense Filters
+    document.querySelectorAll('[data-tag-filter]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        ui.tagFilter = btn.dataset.tagFilter;
+        document.querySelectorAll('[data-tag-filter]').forEach((b) => {
+          b.classList.toggle('is-active', b === btn);
+        });
+        renderExpenseList();
+      });
+    });
+    $('filter-category').addEventListener('change', (e) => {
+      ui.categoryFilter = e.target.value;
+      renderExpenseList();
+    });
+    $('filter-month').addEventListener('change', (e) => {
+      ui.monthFilter = e.target.value;
+      renderExpenseList();
+    });
+    $('filter-search').addEventListener('input', (e) => {
+      ui.searchFilter = e.target.value;
+      renderExpenseList();
+    });
+
+    // Investments Fold Switcher
+    document.querySelectorAll('[data-inv-fold]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        ui.invFold = btn.dataset.invFold;
+        renderInvestments(Store.computeSummary(state));
+      });
+    });
+    document.querySelectorAll('[data-inv-fold-card]').forEach((card) => {
+      card.addEventListener('click', () => {
+        const target = card.dataset.invFoldCard;
+        ui.invFold = ui.invFold === target ? 'all' : target;
+        renderInvestments(Store.computeSummary(state));
+      });
+    });
+
+    // Bond Form
+    $('bond-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      state = Store.addBond(state, {
+        name: $('bond-name').value,
+        amount: $('bond-amount').value,
+        yieldRate: $('bond-yield').value,
+        maturityDate: $('bond-maturity').value,
+        note: $('bond-note').value
+      });
+      e.target.reset();
+      persistAndRender();
+    });
+
+    // ETF Form
+    $('etf-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      state = Store.addEtf(state, {
+        name: $('etf-name').value,
+        ticker: $('etf-ticker').value,
+        fundLabel: $('etf-fund-label').value,
+        initialAmount: $('etf-initial-amount').value,
+        date: Store.todayISO()
+      });
+      e.target.reset();
+      persistAndRender();
+    });
+
+    // Stock Form
+    $('stock-shares').addEventListener('input', updateStockPreview);
+    $('stock-price').addEventListener('input', updateStockPreview);
+    $('cancel-edit-stock').addEventListener('click', cancelEditStock);
+    $('stock-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const payload = {
+        company: $('stock-company').value,
+        ticker: $('stock-ticker').value,
+        shares: $('stock-shares').value,
+        pricePerShare: $('stock-price').value,
+        buyPrice: $('stock-buy-price').value
+      };
+      if (ui.editingStockId) {
+        state = Store.updateStock(state, ui.editingStockId, payload);
+        cancelEditStock();
+      } else {
+        state = Store.addStock(state, payload);
+        e.target.reset();
+        updateStockPreview();
+      }
+      persistAndRender();
+    });
+
+    // Analysis Snapshot Actions
+    $('record-snapshot-now').addEventListener('click', () => {
+      state = Store.addInvestmentSnapshot(state, {
+        date: Store.todayISO(),
+        note: 'Manual snapshot'
+      });
+      persistAndRender();
+    });
+
+    $('snapshot-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      state = Store.addInvestmentSnapshot(state, {
+        date: $('snapshot-date').value,
+        total: $('snapshot-total').value,
+        note: $('snapshot-note').value
+      });
+      $('snapshot-total').value = '';
+      $('snapshot-note').value = '';
+      persistAndRender();
+    });
+
+    // Dialog Open/Close
+    $('open-balance-dialog').addEventListener('click', () => {
+      renderBalanceDialog();
+      $('balance-dialog').showModal();
+      $('base-balance-input').focus();
+    });
+    $('open-income-dialog').addEventListener('click', () => {
+      renderBalanceDialog();
+      $('balance-dialog').showModal();
+      $('income-label').focus();
+    });
+    $('open-data-dialog').addEventListener('click', () => {
+      $('data-feedback').classList.add('hidden');
+      $('data-dialog').showModal();
+    });
+
+    document.querySelectorAll('[data-close-dialog]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const dlg = $(btn.dataset.closeDialog);
+        if (dlg) dlg.close();
+      });
+    });
+
+    document.querySelectorAll('dialog.modal-dialog').forEach((dlg) => {
+      dlg.addEventListener('click', (e) => {
+        if (e.target === dlg) dlg.close();
+      });
+    });
+
+    // Balance & Income Actions
+    $('base-balance-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      state = Store.setBaseBalance(state, $('base-balance-input').value);
+      persistAndRender();
+    });
+
+    $('deduct-investments-toggle').addEventListener('change', (e) => {
+      state = {
+        ...state,
+        settings: {
+          ...state.settings,
+          deductInvestmentsFromBalance: e.target.checked
+        }
+      };
+      persistAndRender();
+    });
+
+    $('income-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      state = Store.addIncome(state, {
+        label: $('income-label').value,
+        amount: $('income-amount').value,
+        date: $('income-date').value
+      });
+      $('income-label').value = '';
+      $('income-amount').value = '';
+      persistAndRender();
+    });
+
+    // Data & Backup Actions
+    $('export-json-btn').addEventListener('click', () => {
+      downloadFile(
+        `ledger-backup-${Store.todayISO()}.json`,
+        JSON.stringify(state, null, 2),
+        'application/json'
+      );
+      showDataFeedback('Exported JSON backup.', false);
+    });
+
+    $('export-csv-btn').addEventListener('click', () => {
+      downloadFile(
+        `ledger-expenses-${Store.todayISO()}.csv`,
+        Store.exportExpensesCsv(state.expenses),
+        'text/csv;charset=utf-8'
+      );
+      showDataFeedback('Exported expenses CSV.', false);
+    });
+
+    $('import-json-input').addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const parsed = JSON.parse(String(reader.result));
+          state = Store.normalizeState(parsed);
+          persistAndRender();
+          showDataFeedback('Backup restored successfully.', false);
+        } catch (_err) {
+          showDataFeedback('Invalid JSON backup file.', true);
+        }
+        e.target.value = '';
+      };
+      reader.readAsText(file);
+    });
+
+    $('load-sample-btn').addEventListener('click', () => {
+      state = Store.createSampleState();
+      persistAndRender();
+      showDataFeedback('Sample data loaded.', false);
+    });
+
+    $('reset-data-btn').addEventListener('click', () => {
+      if (!window.confirm('Clear all balances, expenses, and investments? This cannot be undone unless you exported a backup.')) {
+        return;
+      }
+      state = Store.createEmptyState();
+      persistAndRender();
+      showDataFeedback('All data cleared.', false);
+    });
+  }
+
+  initStaticControls();
+  bindEvents();
+  render();
+})();

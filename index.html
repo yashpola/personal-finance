@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ledger — Personal Finance Tracker</title>
+  <meta name="description" content="Lightweight personal finance tracker for your balance, expenses, investments, and analysis.">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">L</div>
+        <div>
+          <h1 class="brand-title">Ledger</h1>
+          <p class="brand-subtitle">Local-first finance tracker • Saved in browser</p>
+        </div>
+      </div>
+
+      <div class="topbar-actions">
+        <label class="sr-only" for="currency-select">Currency</label>
+        <select id="currency-select" class="select-compact" aria-label="Currency"></select>
+
+        <button type="button" id="open-data-dialog" class="btn btn-secondary btn-sm">
+          Data &amp; Backup
+        </button>
+
+        <button type="button" id="theme-toggle" class="btn btn-secondary btn-sm" aria-label="Toggle color theme">
+          Theme
+        </button>
+      </div>
+    </header>
+
+    <section class="balance-hero" aria-label="Account Balance Overview">
+      <div class="hero-primary">
+        <div class="hero-label-row">
+          <span class="hero-eyebrow">Main Balance</span>
+          <span id="balance-mode-badge" class="pill-badge">Cash Available</span>
+        </div>
+        <div id="hero-balance" class="hero-amount tabular-nums">S$0.00</div>
+        <p id="hero-formula" class="hero-formula tabular-nums">
+          Starting S$0.00 + Income S$0.00 − Expenses S$0.00
+        </p>
+        <div class="hero-actions">
+          <button type="button" id="open-income-dialog" class="btn btn-primary btn-sm">
+            + Add Income
+          </button>
+          <button type="button" id="open-balance-dialog" class="btn btn-secondary btn-sm">
+            Edit Starting Balance
+          </button>
+        </div>
+      </div>
+
+      <div class="hero-metrics">
+        <div class="metric-card">
+          <span class="metric-label">Total Net Worth</span>
+          <strong id="metric-networth" class="metric-value tabular-nums">S$0.00</strong>
+          <span class="metric-sub">Balance + Investments</span>
+        </div>
+
+        <div class="metric-card">
+          <span class="metric-label">Total Expenses</span>
+          <strong id="metric-expenses" class="metric-value metric-danger tabular-nums">S$0.00</strong>
+          <span id="metric-expenses-sub" class="metric-sub tabular-nums">0 entries</span>
+        </div>
+
+        <div class="metric-card">
+          <span class="metric-label">Total Investments</span>
+          <strong id="metric-investments" class="metric-value metric-accent tabular-nums">S$0.00</strong>
+          <span id="metric-investments-sub" class="metric-sub tabular-nums">Bonds • ETFs • Stocks</span>
+        </div>
+      </div>
+    </section>
+
+    <nav class="main-tabs" role="tablist" aria-label="Finance sections">
+      <button
+        type="button"
+        id="tab-expenses"
+        class="tab-btn is-active"
+        role="tab"
+        aria-selected="true"
+        aria-controls="panel-expenses"
+        data-tab="expenses"
+      >
+        Expenses
+        <span id="tab-expenses-count" class="tab-count tabular-nums">0</span>
+      </button>
+      <button
+        type="button"
+        id="tab-investments"
+        class="tab-btn"
+        role="tab"
+        aria-selected="false"
+        aria-controls="panel-investments"
+        data-tab="investments"
+        tabindex="-1"
+      >
+        Investments
+        <span id="tab-investments-count" class="tab-count tabular-nums">0</span>
+      </button>
+      <button
+        type="button"
+        id="tab-analysis"
+        class="tab-btn"
+        role="tab"
+        aria-selected="false"
+        aria-controls="panel-analysis"
+        data-tab="analysis"
+        tabindex="-1"
+      >
+        Analysis
+      </button>
+    </nav>
+
+    <main>
+      <!-- EXPENSES TAB -->
+      <section
+        id="panel-expenses"
+        class="tab-panel"
+        role="tabpanel"
+        aria-labelledby="tab-expenses"
+      >
+        <div class="expenses-grid">
+          <div class="expenses-left">
+            <div class="card">
+              <div class="card-header">
+                <h2 id="expense-form-title" class="card-title">Log Expense</h2>
+                <button type="button" id="cancel-edit-expense" class="btn btn-ghost btn-xs hidden">
+                  Cancel Edit
+                </button>
+              </div>
+
+              <form id="expense-form" class="stack-form">
+                <input type="hidden" id="expense-edit-id" value="">
+
+                <div class="form-row-2">
+                  <div class="field">
+                    <label for="expense-amount">Amount</label>
+                    <input
+                      id="expense-amount"
+                      name="amount"
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      placeholder="0.00"
+                      required
+                    >
+                  </div>
+                  <div class="field">
+                    <label for="expense-date">Date</label>
+                    <input id="expense-date" name="date" type="date" required>
+                  </div>
+                </div>
+
+                <div class="form-row-2">
+                  <div class="field">
+                    <label for="expense-category">Category</label>
+                    <select id="expense-category" name="category" required></select>
+                  </div>
+                  <div class="field">
+                    <label for="expense-subcategory">Subcategory</label>
+                    <select id="expense-subcategory" name="subcategory" required></select>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <span class="field-label">Tag</span>
+                  <div class="segmented-control" role="radiogroup" aria-label="Expense tag">
+                    <label class="segment-option">
+                      <input type="radio" name="tag" value="personal" checked>
+                      <span>Personal</span>
+                    </label>
+                    <label class="segment-option">
+                      <input type="radio" name="tag" value="family">
+                      <span>Family</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <label for="expense-note">Note <span class="optional">(optional)</span></label>
+                  <input
+                    id="expense-note"
+                    name="note"
+                    type="text"
+                    maxlength="140"
+                    placeholder="e.g. Lunch, monthly subscription, groceries"
+                  >
+                </div>
+
+                <button type="submit" id="expense-submit-btn" class="btn btn-primary btn-block">
+                  Add Expense
+                </button>
+              </form>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <h2 class="card-title">Spending Breakdown</h2>
+              </div>
+
+              <div class="tag-split-block">
+                <div class="split-header">
+                  <span>Personal vs Family</span>
+                  <span id="tag-split-summary" class="muted tabular-nums">No expenses yet</span>
+                </div>
+                <div class="stacked-bar" aria-label="Personal vs Family expense split">
+                  <div id="bar-personal" class="bar-segment bar-personal" style="width: 50%"></div>
+                  <div id="bar-family" class="bar-segment bar-family" style="width: 50%"></div>
+                </div>
+                <div class="split-legend">
+                  <span class="legend-item"><i class="dot dot-personal"></i> Personal <strong id="total-personal" class="tabular-nums">S$0.00</strong></span>
+                  <span class="legend-item"><i class="dot dot-family"></i> Family <strong id="total-family" class="tabular-nums">S$0.00</strong></span>
+                </div>
+              </div>
+
+              <div id="category-breakdown" class="category-breakdown"></div>
+            </div>
+          </div>
+
+          <div class="expenses-right">
+            <div class="card">
+              <div class="card-header wrap-header">
+                <div>
+                  <h2 class="card-title">Expense History</h2>
+                  <p id="expense-filter-summary" class="card-subtitle tabular-nums">0 expenses</p>
+                </div>
+
+                <div class="filter-pills" role="group" aria-label="Filter by tag">
+                  <button type="button" class="pill-filter is-active" data-tag-filter="all">All</button>
+                  <button type="button" class="pill-filter" data-tag-filter="personal">Personal</button>
+                  <button type="button" class="pill-filter" data-tag-filter="family">Family</button>
+                </div>
+              </div>
+
+              <div class="filters-bar">
+                <select id="filter-category" class="select-compact" aria-label="Filter by category">
+                  <option value="all">All Categories</option>
+                </select>
+                <select id="filter-month" class="select-compact" aria-label="Filter by month">
+                  <option value="all">All Months</option>
+                </select>
+                <input
+                  id="filter-search"
+                  type="search"
+                  class="input-compact"
+                  placeholder="Search notes or subcategory..."
+                  aria-label="Search expenses"
+                >
+              </div>
+
+              <div id="expense-list" class="item-list"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- INVESTMENTS TAB -->
+      <section
+        id="panel-investments"
+        class="tab-panel hidden"
+        role="tabpanel"
+        aria-labelledby="tab-investments"
+        hidden
+      >
+        <div class="card portfolio-overview">
+          <div class="card-header wrap-header">
+            <div>
+              <h2 class="card-title">Portfolio Allocation</h2>
+              <p class="card-subtitle">Bonds, ETFs &amp; Stocks across your holdings</p>
+            </div>
+            <div class="filter-pills" role="group" aria-label="Filter investment fold">
+              <button type="button" class="pill-filter is-active" data-inv-fold="all">All (3-Fold)</button>
+              <button type="button" class="pill-filter" data-inv-fold="bonds">Bonds</button>
+              <button type="button" class="pill-filter" data-inv-fold="etfs">ETFs</button>
+              <button type="button" class="pill-filter" data-inv-fold="stocks">Stocks</button>
+            </div>
+          </div>
+
+          <div class="stacked-bar stacked-bar-lg" aria-label="Investment allocation across Bonds, ETFs, and Stocks">
+            <div id="bar-bonds" class="bar-segment bar-bonds" style="width: 0%"></div>
+            <div id="bar-etfs" class="bar-segment bar-etfs" style="width: 0%"></div>
+            <div id="bar-stocks" class="bar-segment bar-stocks" style="width: 0%"></div>
+          </div>
+
+          <div class="fold-summary-grid">
+            <button type="button" class="fold-stat" data-inv-fold-card="bonds">
+              <span class="legend-item"><i class="dot dot-bonds"></i> Bonds</span>
+              <strong id="inv-total-bonds" class="tabular-nums">S$0.00</strong>
+              <span id="inv-pct-bonds" class="muted tabular-nums">0%</span>
+            </button>
+            <button type="button" class="fold-stat" data-inv-fold-card="etfs">
+              <span class="legend-item"><i class="dot dot-etfs"></i> ETFs</span>
+              <strong id="inv-total-etfs" class="tabular-nums">S$0.00</strong>
+              <span id="inv-pct-etfs" class="muted tabular-nums">0%</span>
+            </button>
+            <button type="button" class="fold-stat" data-inv-fold-card="stocks">
+              <span class="legend-item"><i class="dot dot-stocks"></i> Stocks</span>
+              <strong id="inv-total-stocks" class="tabular-nums">S$0.00</strong>
+              <span id="inv-pct-stocks" class="muted tabular-nums">0%</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="investments-grid">
+          <!-- FOLD 1: BONDS -->
+          <article id="fold-bonds" class="card fold-card">
+            <div class="card-header">
+              <div>
+                <h3 class="card-title"><span class="dot dot-bonds"></span> Bonds</h3>
+                <p class="card-subtitle">Fixed-income securities &amp; treasuries</p>
+              </div>
+              <span id="bonds-badge-total" class="pill-badge tabular-nums">S$0.00</span>
+            </div>
+
+            <form id="bond-form" class="stack-form compact-form">
+              <div class="form-row-2">
+                <div class="field">
+                  <label for="bond-name">Bond Name / Issuer</label>
+                  <input id="bond-name" name="name" type="text" placeholder="e.g. Singapore Savings Bond" required>
+                </div>
+                <div class="field">
+                  <label for="bond-amount">Amount Invested</label>
+                  <input id="bond-amount" name="amount" type="number" step="0.01" min="0.01" placeholder="0.00" required>
+                </div>
+              </div>
+              <div class="form-row-2">
+                <div class="field">
+                  <label for="bond-yield">Yield % <span class="optional">(opt.)</span></label>
+                  <input id="bond-yield" name="yieldRate" type="number" step="0.01" min="0" placeholder="3.25">
+                </div>
+                <div class="field">
+                  <label for="bond-maturity">Maturity <span class="optional">(opt.)</span></label>
+                  <input id="bond-maturity" name="maturityDate" type="date">
+                </div>
+              </div>
+              <div class="field">
+                <label for="bond-note">Note <span class="optional">(optional)</span></label>
+                <input id="bond-note" name="note" type="text" maxlength="140" placeholder="Coupon or account details">
+              </div>
+              <button type="submit" class="btn btn-primary btn-block">Add Bond</button>
+            </form>
+
+            <div id="bonds-list" class="item-list"></div>
+          </article>
+
+          <!-- FOLD 2: ETFs -->
+          <article id="fold-etfs" class="card fold-card">
+            <div class="card-header">
+              <div>
+                <h3 class="card-title"><span class="dot dot-etfs"></span> ETFs</h3>
+                <p class="card-subtitle">Add ETFs and log funds invested inside each ETF</p>
+              </div>
+              <span id="etfs-badge-total" class="pill-badge tabular-nums">S$0.00</span>
+            </div>
+
+            <form id="etf-form" class="stack-form compact-form">
+              <div class="form-row-2">
+                <div class="field">
+                  <label for="etf-name">ETF Name</label>
+                  <input id="etf-name" name="name" type="text" placeholder="e.g. Vanguard S&amp;P 500" required>
+                </div>
+                <div class="field">
+                  <label for="etf-ticker">Ticker <span class="optional">(opt.)</span></label>
+                  <input id="etf-ticker" name="ticker" type="text" maxlength="16" placeholder="VOO">
+                </div>
+              </div>
+              <div class="form-row-2">
+                <div class="field">
+                  <label for="etf-fund-label">Initial Fund / Tranche</label>
+                  <input id="etf-fund-label" name="fundLabel" type="text" placeholder="e.g. Core Index Fund">
+                </div>
+                <div class="field">
+                  <label for="etf-initial-amount">Initial Amount <span class="optional">(opt.)</span></label>
+                  <input id="etf-initial-amount" name="initialAmount" type="number" step="0.01" min="0.01" placeholder="0.00">
+                </div>
+              </div>
+              <button type="submit" class="btn btn-primary btn-block">Add ETF</button>
+            </form>
+
+            <div id="etfs-list" class="item-list"></div>
+          </article>
+
+          <!-- FOLD 3: STOCKS -->
+          <article id="fold-stocks" class="card fold-card">
+            <div class="card-header">
+              <div>
+                <h3 class="card-title"><span class="dot dot-stocks"></span> Stocks</h3>
+                <p class="card-subtitle">Track company holdings &amp; number of shares</p>
+              </div>
+              <span id="stocks-badge-total" class="pill-badge tabular-nums">S$0.00</span>
+            </div>
+
+            <form id="stock-form" class="stack-form compact-form">
+              <input type="hidden" id="stock-edit-id" value="">
+              <div class="form-row-2">
+                <div class="field">
+                  <label for="stock-company">Company</label>
+                  <input id="stock-company" name="company" type="text" placeholder="e.g. DBS Group" required>
+                </div>
+                <div class="field">
+                  <label for="stock-ticker">Ticker <span class="optional">(opt.)</span></label>
+                  <input id="stock-ticker" name="ticker" type="text" maxlength="16" placeholder="D05">
+                </div>
+              </div>
+              <div class="form-row-2">
+                <div class="field">
+                  <label for="stock-shares">Shares</label>
+                  <input id="stock-shares" name="shares" type="number" step="any" min="0.000001" placeholder="10" required>
+                </div>
+                <div class="field">
+                  <label for="stock-price">Current Price / Share</label>
+                  <input id="stock-price" name="pricePerShare" type="number" step="0.01" min="0" placeholder="0.00" required>
+                </div>
+              </div>
+              <div class="field">
+                <label for="stock-buy-price">Avg Buy Price / Share <span class="optional">(opt., for growth tracking)</span></label>
+                <input id="stock-buy-price" name="buyPrice" type="number" step="0.01" min="0" placeholder="Same as current price if blank">
+              </div>
+              <div class="computed-preview">
+                <span>Position Value</span>
+                <strong id="stock-preview-total" class="tabular-nums">S$0.00</strong>
+              </div>
+              <div class="form-actions-inline">
+                <button type="submit" id="stock-submit-btn" class="btn btn-primary btn-block">Add Stock</button>
+                <button type="button" id="cancel-edit-stock" class="btn btn-secondary hidden">Cancel</button>
+              </div>
+            </form>
+
+            <div id="stocks-list" class="item-list"></div>
+          </article>
+        </div>
+      </section>
+
+      <!-- ANALYSIS TAB -->
+      <section
+        id="panel-analysis"
+        class="tab-panel hidden"
+        role="tabpanel"
+        aria-labelledby="tab-analysis"
+        hidden
+      >
+        <div class="analysis-grid">
+          <!-- CATEGORY SUMMARIZATION -->
+          <div class="card">
+            <div class="card-header wrap-header">
+              <div>
+                <h2 class="card-title">Expense Summary by Category</h2>
+                <p class="card-subtitle">Totals, averages, and Personal vs Family split across all 5 categories</p>
+              </div>
+            </div>
+
+            <div class="analysis-kpi-grid">
+              <div class="metric-card">
+                <span class="metric-label">Avg Expense</span>
+                <strong id="an-avg-expense" class="metric-value tabular-nums">S$0.00</strong>
+                <span id="an-expense-count" class="metric-sub tabular-nums">0 entries</span>
+              </div>
+              <div class="metric-card">
+                <span class="metric-label">Top Category</span>
+                <strong id="an-top-category" class="metric-value">—</strong>
+                <span id="an-top-category-sub" class="metric-sub tabular-nums">No data</span>
+              </div>
+              <div class="metric-card">
+                <span class="metric-label">Top Subcategory</span>
+                <strong id="an-top-subcategory" class="metric-value">—</strong>
+                <span id="an-top-subcategory-sub" class="metric-sub tabular-nums">No data</span>
+              </div>
+              <div class="metric-card">
+                <span class="metric-label">Net Cash Flow</span>
+                <strong id="an-net-cashflow" class="metric-value tabular-nums">S$0.00</strong>
+                <span id="an-savings-rate" class="metric-sub tabular-nums">Income − Expenses</span>
+              </div>
+            </div>
+
+            <div id="analysis-category-table" class="table-wrap"></div>
+
+            <div class="monthly-section">
+              <h3 class="section-mini-title">Monthly Spending Trend</h3>
+              <div id="analysis-monthly-trend" class="monthly-bars"></div>
+            </div>
+          </div>
+
+          <!-- INVESTMENT GROWTH TRACKING -->
+          <div class="card">
+            <div class="card-header wrap-header">
+              <div>
+                <h2 class="card-title">Investment Growth &amp; Performance</h2>
+                <p class="card-subtitle">Track cost basis vs market value and portfolio snapshots over time</p>
+              </div>
+              <button type="button" id="record-snapshot-now" class="btn btn-primary btn-sm">
+                Record Today's Snapshot
+              </button>
+            </div>
+
+            <div class="analysis-kpi-grid">
+              <div class="metric-card">
+                <span class="metric-label">Current Portfolio</span>
+                <strong id="an-inv-current" class="metric-value tabular-nums">S$0.00</strong>
+                <span id="an-inv-cost" class="metric-sub tabular-nums">Invested: S$0.00</span>
+              </div>
+              <div class="metric-card">
+                <span class="metric-label">Unrealized Gain</span>
+                <strong id="an-inv-gain" class="metric-value tabular-nums">S$0.00</strong>
+                <span id="an-inv-gain-pct" class="metric-sub tabular-nums">0% vs cost basis</span>
+              </div>
+              <div class="metric-card">
+                <span class="metric-label">Snapshot Growth</span>
+                <strong id="an-snap-growth" class="metric-value tabular-nums">—</strong>
+                <span id="an-snap-range" class="metric-sub tabular-nums">Log 2+ snapshots</span>
+              </div>
+              <div class="metric-card">
+                <span class="metric-label">Est. Bond Yield / Yr</span>
+                <strong id="an-bond-yield" class="metric-value tabular-nums">S$0.00</strong>
+                <span class="metric-sub">Based on bond yield %</span>
+              </div>
+            </div>
+
+            <div class="growth-chart-card">
+              <div class="split-header">
+                <span>Portfolio Value Over Time</span>
+                <span id="an-chart-subtitle" class="muted tabular-nums">Record snapshots to plot growth</span>
+              </div>
+              <div id="growth-chart-wrap" class="growth-chart-wrap"></div>
+            </div>
+
+            <div id="analysis-investment-table" class="table-wrap"></div>
+
+            <form id="snapshot-form" class="snapshot-form">
+              <h3 class="section-mini-title">Log Historical or Custom Snapshot</h3>
+              <div class="snapshot-form-row">
+                <input id="snapshot-date" type="date" required aria-label="Snapshot date">
+                <input id="snapshot-total" type="number" step="0.01" min="0" placeholder="Total value (blank = current)" aria-label="Snapshot total value">
+                <input id="snapshot-note" type="text" maxlength="100" placeholder="Note (e.g. Oct checkpoint)" aria-label="Snapshot note">
+                <button type="submit" class="btn btn-secondary btn-sm">Add Checkpoint</button>
+              </div>
+            </form>
+
+            <div id="snapshot-list" class="item-list compact-list"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- BALANCE & INCOME DIALOG -->
+  <dialog id="balance-dialog" class="modal-dialog" aria-labelledby="balance-dialog-title">
+    <div class="dialog-header">
+      <h2 id="balance-dialog-title" class="card-title">Balance &amp; Income</h2>
+      <button type="button" class="btn btn-ghost btn-xs" data-close-dialog="balance-dialog" aria-label="Close dialog">✕</button>
+    </div>
+
+    <div class="dialog-body">
+      <form id="base-balance-form" class="stack-form">
+        <div class="field">
+          <label for="base-balance-input">Starting / Base Balance</label>
+          <div class="input-with-btn">
+            <input id="base-balance-input" type="number" step="0.01" required>
+            <button type="submit" class="btn btn-primary btn-sm">Save Base</button>
+          </div>
+        </div>
+        <label class="checkbox-row">
+          <input id="deduct-investments-toggle" type="checkbox">
+          <span>Deduct total investments from Main Cash Balance</span>
+        </label>
+      </form>
+
+      <hr class="divider">
+
+      <form id="income-form" class="stack-form">
+        <h3 class="section-mini-title">Add Income / Deposit</h3>
+        <div class="form-row-2">
+          <div class="field">
+            <label for="income-label">Source</label>
+            <input id="income-label" type="text" placeholder="e.g. Salary, Bonus" required>
+          </div>
+          <div class="field">
+            <label for="income-amount">Amount</label>
+            <input id="income-amount" type="number" step="0.01" min="0.01" placeholder="0.00" required>
+          </div>
+        </div>
+        <div class="form-row-2">
+          <div class="field">
+            <label for="income-date">Date</label>
+            <input id="income-date" type="date" required>
+          </div>
+          <div class="field field-end">
+            <button type="submit" class="btn btn-primary btn-block">+ Add Income</button>
+          </div>
+        </div>
+      </form>
+
+      <div class="income-history-wrap">
+        <h3 class="section-mini-title">Income History</h3>
+        <div id="income-list" class="item-list compact-list"></div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- DATA & BACKUP DIALOG -->
+  <dialog id="data-dialog" class="modal-dialog" aria-labelledby="data-dialog-title">
+    <div class="dialog-header">
+      <h2 id="data-dialog-title" class="card-title">Data &amp; Backup (No Database)</h2>
+      <button type="button" class="btn btn-ghost btn-xs" data-close-dialog="data-dialog" aria-label="Close dialog">✕</button>
+    </div>
+
+    <div class="dialog-body stack-form">
+      <p class="muted">
+        All records are stored locally in your browser via <code>localStorage</code> and persist across restarts and shutdowns on this browser/device. Export a JSON backup anytime to transfer devices or keep a copy.
+      </p>
+
+      <div class="backup-actions-grid">
+        <button type="button" id="export-json-btn" class="btn btn-secondary">Export JSON Backup</button>
+        <button type="button" id="export-csv-btn" class="btn btn-secondary">Export Expenses CSV</button>
+      </div>
+
+      <div class="field">
+        <label for="import-json-input">Restore from JSON Backup</label>
+        <input id="import-json-input" type="file" accept="application/json,.json">
+      </div>
+
+      <hr class="divider">
+
+      <div class="backup-actions-grid">
+        <button type="button" id="load-sample-btn" class="btn btn-secondary">Load Sample Data</button>
+        <button type="button" id="reset-data-btn" class="btn btn-danger">Clear All Data</button>
+      </div>
+
+      <p id="data-feedback" class="feedback-msg hidden" role="status"></p>
+    </div>
+  </dialog>
+
+  <script defer src="store.js"></script>
+  <script defer src="app.js"></script>
+</body>
+</html>
