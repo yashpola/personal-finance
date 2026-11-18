@@ -1009,17 +1009,39 @@ select:focus {
   background: var(--surface-subtle);
 }
 
+.sync-banner {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
 .etf-add-fund-form {
-  display: grid;
-  grid-template-columns: 1fr 110px auto;
+  display: flex;
+  flex-direction: column;
   gap: 6px;
   padding-top: 4px;
 }
 
-.etf-add-fund-form input {
+.etf-fund-inputs {
+  display: grid;
+  grid-template-columns: 88px 1fr 96px auto;
+  gap: 6px;
+}
+
+.etf-fund-inputs input,
+.etf-fund-inputs select {
   min-height: 32px;
   font-size: 0.82rem;
   padding: 4px 8px;
+}
+
+.etf-fund-inputs select {
+  padding-right: 26px;
+  background-position: right 6px center;
+}
+
+.checkbox-compact {
+  font-size: 0.78rem;
 }
 
 .computed-preview {

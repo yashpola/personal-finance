@@ -318,6 +318,13 @@
               <span id="inv-pct-stocks" class="muted tabular-nums">0%</span>
             </button>
           </div>
+
+          <div class="sync-banner">
+            <label class="checkbox-row">
+              <input id="sync-investments-toggle" type="checkbox">
+              <span><strong>Sync future buys &amp; sells with Main Balance</strong> (existing holdings stay frozen; only new buys, sells, or share changes adjust cash balance)</span>
+            </label>
+          </div>
         </div>
 
         <div class="investments-grid">
@@ -356,6 +363,10 @@
                 <label for="bond-note">Note <span class="optional">(optional)</span></label>
                 <input id="bond-note" name="note" type="text" maxlength="140" placeholder="Coupon or account details">
               </div>
+              <label class="checkbox-row">
+                <input id="bond-adjust-balance" type="checkbox">
+                <span>Subtract from Main Balance</span>
+              </label>
               <button type="submit" class="btn btn-primary btn-block">Add Bond</button>
             </form>
 
@@ -393,6 +404,10 @@
                   <input id="etf-initial-amount" name="initialAmount" type="number" step="0.01" min="0.01" placeholder="0.00">
                 </div>
               </div>
+              <label class="checkbox-row">
+                <input id="etf-adjust-balance" type="checkbox">
+                <span>Subtract initial amount from Main Balance</span>
+              </label>
               <button type="submit" class="btn btn-primary btn-block">Add ETF</button>
             </form>
 
@@ -439,6 +454,10 @@
                 <span>Position Value</span>
                 <strong id="stock-preview-total" class="tabular-nums">S$0.00</strong>
               </div>
+              <label class="checkbox-row">
+                <input id="stock-adjust-balance" type="checkbox">
+                <span id="stock-cash-impact" class="tabular-nums">Adjust Main Balance for share changes</span>
+              </label>
               <div class="form-actions-inline">
                 <button type="submit" id="stock-submit-btn" class="btn btn-primary btn-block">Add Stock</button>
                 <button type="button" id="cancel-edit-stock" class="btn btn-secondary hidden">Cancel</button>
@@ -611,6 +630,11 @@
       <div class="income-history-wrap">
         <h3 class="section-mini-title">Income History</h3>
         <div id="income-list" class="item-list compact-list"></div>
+      </div>
+
+      <div class="income-history-wrap">
+        <h3 class="section-mini-title">Investment Cash Transfers</h3>
+        <div id="transfer-list" class="item-list compact-list"></div>
       </div>
     </div>
   </dialog>

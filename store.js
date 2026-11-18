@@ -143,13 +143,15 @@
       settings: {
         currency: 'SGD',
         deductInvestmentsFromBalance: false,
+        syncInvestmentsWithBalance: false,
         theme: 'system'
       },
       customSubcategories: createEmptyCustomSubcategories(),
       customTags: [],
       balance: {
         baseAmount: 0,
-        incomes: []
+        incomes: [],
+        investmentTransfers: []
       },
       expenses: [],
       investments: {
@@ -231,6 +233,7 @@
         base.settings.currency = raw.settings.currency;
       }
       base.settings.deductInvestmentsFromBalance = Boolean(raw.settings.deductInvestmentsFromBalance);
+      base.settings.syncInvestmentsWithBalance = Boolean(raw.settings.syncInvestmentsWithBalance);
       if (['light', 'dark', 'system'].includes(raw.settings.theme)) {
         base.settings.theme = raw.settings.theme;
       }
@@ -286,6 +289,16 @@
             label: String(inc.label || 'Income').trim().slice(0, 80),
             amount: roundMoney(inc.amount),
             date: typeof inc.date === 'string' && inc.date ? inc.date : todayISO()
+          }));
+      }
+      if (Array.isArray(raw.balance.investmentTransfers)) {
+        base.balance.investmentTransfers = raw.balance.investmentTransfers
+          .filter((tx) => tx && typeof tx === 'object' && Number.isFinite(Number(tx.amount)) && Number(tx.amount) !== 0)
+          .map((tx) => ({
+            id: typeof tx.id === 'string' && tx.id ? tx.id : createId('tx'),
+            label: String(tx.label || 'Investment Transfer').trim().slice(0, 100),
+            amount: roundMoney(tx.amount),
+            date: typeof tx.date === 'string' && tx.date ? tx.date : todayISO()
           }));
       }
     }
@@ -462,9 +475,12 @@
     const totalInvestments = roundMoney(totalBonds + totalEtfs + totalStocks);
     const totalInvestmentsCost = roundMoney(totalBonds + totalEtfsCost + totalStocksCost);
 
+    const totalInvestmentTransfers = roundMoney(
+      (state.balance.investmentTransfers || []).reduce((sum, tx) => sum + roundMoney(tx.amount), 0)
+    );
     const deduct = Boolean(state.settings && state.settings.deductInvestmentsFromBalance);
     const cashBalance = roundMoney(
-      baseBalance + totalIncome - totalExpenses - (deduct ? totalInvestments : 0)
+      baseBalance + totalIncome - totalExpenses + totalInvestmentTransfers - (deduct ? totalInvestments : 0)
     );
     const netWorth = roundMoney(cashBalance + totalInvestments);
 
@@ -515,6 +531,7 @@
       baseBalance,
       totalIncome,
       totalExpenses,
+      totalInvestmentTransfers,
       cashBalance,
       totalBonds,
       totalEtfs,
@@ -850,6 +867,36 @@
     };
   }
 
+  function recordInvestmentTransfer(state, label, signedAmount, date) {
+    const amount = roundMoney(signedAmount);
+    if (!Number.isFinite(amount) || amount === 0) return state;
+    const tx = {
+      id: createId('tx'),
+      label: String(label || 'Investment Transfer').trim().slice(0, 100),
+      amount,
+      date: date || todayISO()
+    };
+    const prev = Array.isArray(state.balance.investmentTransfers) ? state.balance.investmentTransfers : [];
+    return {
+      ...state,
+      balance: {
+        ...state.balance,
+        investmentTransfers: [tx, ...prev]
+      }
+    };
+  }
+
+  function deleteInvestmentTransfer(state, id) {
+    const prev = Array.isArray(state.balance.investmentTransfers) ? state.balance.investmentTransfers : [];
+    return {
+      ...state,
+      balance: {
+        ...state.balance,
+        investmentTransfers: prev.filter((tx) => tx.id !== id)
+      }
+    };
+  }
+
   function addBond(state, input) {
     const name = String(input.name || '').trim().slice(0, 100);
     const amount = roundMoney(input.amount);
@@ -871,13 +918,17 @@
       note: String(input.note || '').trim().slice(0, 140)
     };
 
-    return {
+    let nextState = {
       ...state,
       investments: {
         ...state.investments,
         bonds: [bond, ...state.investments.bonds]
       }
     };
+    if (input.adjustBalance) {
+      nextState = recordInvestmentTransfer(nextState, `Bought bond: ${name}`, -amount, todayISO());
+    }
+    return nextState;
   }
 
   function deleteBond(state, id) {
@@ -890,19 +941,30 @@
     };
   }
 
+  function sellBond(state, id, adjustBalance) {
+    const bond = state.investments.bonds.find((b) => b.id === id);
+    if (!bond) return state;
+    let nextState = deleteBond(state, id);
+    if (adjustBalance && bond.amount > 0) {
+      nextState = recordInvestmentTransfer(nextState, `Redeemed bond: ${bond.name}`, bond.amount, todayISO());
+    }
+    return nextState;
+  }
+
   function addEtf(state, input) {
     const name = String(input.name || '').trim().slice(0, 100);
     if (!name) throw new Error('ETF name is required.');
     const ticker = String(input.ticker || '').trim().toUpperCase().slice(0, 16);
 
     const funds = [];
+    let initialAmt = 0;
     if (input.initialAmount !== undefined && input.initialAmount !== '' && input.initialAmount !== null) {
-      const amt = roundMoney(input.initialAmount);
-      if (amt <= 0) throw new Error('Initial ETF fund amount must be greater than zero.');
+      initialAmt = roundMoney(input.initialAmount);
+      if (initialAmt <= 0) throw new Error('Initial ETF fund amount must be greater than zero.');
       funds.push({
         id: createId('fund'),
         label: String(input.fundLabel || 'Initial Investment').trim().slice(0, 100) || 'Initial Investment',
-        amount: amt,
+        amount: initialAmt,
         date: input.date || todayISO()
       });
     }
@@ -922,13 +984,17 @@
       funds
     };
 
-    return {
+    let nextState = {
       ...state,
       investments: {
         ...state.investments,
         etfs: [etf, ...state.investments.etfs]
       }
     };
+    if (input.adjustBalance && initialAmt > 0) {
+      nextState = recordInvestmentTransfer(nextState, `Bought ETF: ${ticker || name}`, -initialAmt, input.date || todayISO());
+    }
+    return nextState;
   }
 
   function setEtfCurrentValue(state, etfId, value) {
@@ -976,13 +1042,77 @@
       funds: [fund, ...existing.funds]
     };
 
-    return {
+    let nextState = {
       ...state,
       investments: {
         ...state.investments,
         etfs
       }
     };
+    if (input.adjustBalance) {
+      nextState = recordInvestmentTransfer(
+        nextState,
+        `Invested in ETF: ${existing.ticker || existing.name} (${label})`,
+        -amount,
+        fund.date
+      );
+    }
+    return nextState;
+  }
+
+  function withdrawEtf(state, etfId, input) {
+    const idx = state.investments.etfs.findIndex((e) => e.id === etfId);
+    if (idx === -1) throw new Error('ETF not found.');
+    const existing = state.investments.etfs[idx];
+    const amount = roundMoney(input.amount);
+    if (amount <= 0) throw new Error('Withdrawal amount must be greater than zero.');
+
+    const currentVal = getEtfCurrentValue(existing);
+    if (amount > currentVal && getEtfTotal(existing) > 0) {
+      // Allow selling up to current market value, or reduce cost proportionally/newest-first
+    }
+
+    let remaining = amount;
+    const nextFunds = [];
+    for (const f of existing.funds) {
+      if (remaining <= 0) {
+        nextFunds.push(f);
+      } else if (f.amount > remaining) {
+        nextFunds.push({ ...f, amount: roundMoney(f.amount - remaining) });
+        remaining = 0;
+      } else {
+        remaining = roundMoney(remaining - f.amount);
+      }
+    }
+
+    const nextCurrentVal = existing.currentValue !== null && existing.currentValue !== undefined
+      ? Math.max(0, roundMoney(existing.currentValue - amount))
+      : null;
+
+    const etfs = state.investments.etfs.slice();
+    etfs[idx] = {
+      ...existing,
+      currentValue: nextCurrentVal,
+      funds: nextFunds
+    };
+
+    let nextState = {
+      ...state,
+      investments: {
+        ...state.investments,
+        etfs
+      }
+    };
+    if (input.adjustBalance) {
+      const note = String(input.label || '').trim();
+      nextState = recordInvestmentTransfer(
+        nextState,
+        `Sold ETF: ${existing.ticker || existing.name}${note ? ` (${note})` : ''}`,
+        amount,
+        input.date || todayISO()
+      );
+    }
+    return nextState;
   }
 
   function deleteEtfFund(state, etfId, fundId) {
@@ -1012,6 +1142,22 @@
     };
   }
 
+  function sellEtf(state, etfId, adjustBalance) {
+    const existing = state.investments.etfs.find((e) => e.id === etfId);
+    if (!existing) return state;
+    const proceeds = getEtfCurrentValue(existing);
+    let nextState = deleteEtf(state, etfId);
+    if (adjustBalance && proceeds > 0) {
+      nextState = recordInvestmentTransfer(
+        nextState,
+        `Sold ETF: ${existing.ticker || existing.name}`,
+        proceeds,
+        todayISO()
+      );
+    }
+    return nextState;
+  }
+
   function addStock(state, input) {
     const company = String(input.company || '').trim().slice(0, 100);
     const shares = Number(input.shares);
@@ -1038,13 +1184,28 @@
       note: String(input.note || '').trim().slice(0, 140)
     };
 
-    return {
+    let nextState = {
       ...state,
       investments: {
         ...state.investments,
         stocks: [stock, ...state.investments.stocks]
       }
     };
+
+    if (input.adjustBalance) {
+      const unitCost = stock.buyPrice !== null ? stock.buyPrice : stock.pricePerShare;
+      const cost = roundMoney(stock.shares * unitCost);
+      if (cost > 0) {
+        nextState = recordInvestmentTransfer(
+          nextState,
+          `Bought ${stock.shares} ${stock.ticker || stock.company}`,
+          -cost,
+          stock.date
+        );
+      }
+    }
+
+    return nextState;
   }
 
   function updateStock(state, id, updates) {
@@ -1073,13 +1234,33 @@
 
     const stocks = state.investments.stocks.slice();
     stocks[idx] = next;
-    return {
+    let nextState = {
       ...state,
       investments: {
         ...state.investments,
         stocks
       }
     };
+
+    const deltaShares = Math.round((next.shares - existing.shares) * 1000000) / 1000000;
+    if (updates.adjustBalance && deltaShares !== 0) {
+      const tradePrice = updates.tradePrice !== undefined && updates.tradePrice !== '' && updates.tradePrice !== null
+        ? Number(updates.tradePrice)
+        : next.pricePerShare;
+      const cashDelta = roundMoney(-deltaShares * tradePrice);
+      if (cashDelta !== 0) {
+        const verb = deltaShares > 0 ? 'Bought' : 'Sold';
+        const qty = Math.abs(deltaShares);
+        nextState = recordInvestmentTransfer(
+          nextState,
+          `${verb} ${qty} ${next.ticker || next.company}`,
+          cashDelta,
+          todayISO()
+        );
+      }
+    }
+
+    return nextState;
   }
 
   function deleteStock(state, id) {
@@ -1090,6 +1271,22 @@
         stocks: state.investments.stocks.filter((s) => s.id !== id)
       }
     };
+  }
+
+  function sellStock(state, id, adjustBalance) {
+    const stock = state.investments.stocks.find((s) => s.id === id);
+    if (!stock) return state;
+    const proceeds = getStockTotal(stock);
+    let nextState = deleteStock(state, id);
+    if (adjustBalance && proceeds > 0) {
+      nextState = recordInvestmentTransfer(
+        nextState,
+        `Sold ${stock.shares} ${stock.ticker || stock.company}`,
+        proceeds,
+        todayISO()
+      );
+    }
+    return nextState;
   }
 
   function addInvestmentSnapshot(state, input) {
@@ -1299,16 +1496,22 @@
     setBaseBalance,
     addIncome,
     deleteIncome,
+    recordInvestmentTransfer,
+    deleteInvestmentTransfer,
     addBond,
     deleteBond,
+    sellBond,
     addEtf,
     setEtfCurrentValue,
     addEtfFund,
+    withdrawEtf,
     deleteEtfFund,
     deleteEtf,
+    sellEtf,
     addStock,
     updateStock,
     deleteStock,
+    sellStock,
     addInvestmentSnapshot,
     deleteInvestmentSnapshot,
     loadFromStorage,

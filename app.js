@@ -191,9 +191,19 @@
     heroEl.classList.toggle('is-negative', summary.cashBalance < 0);
 
     const deduct = Boolean(state.settings.deductInvestmentsFromBalance);
-    $('balance-mode-badge').textContent = deduct ? 'After Investments' : 'Cash Available';
+    $('balance-mode-badge').textContent = deduct
+      ? 'After Investments'
+      : state.settings.syncInvestmentsWithBalance
+        ? 'Cash (Synced)'
+        : 'Cash Available';
 
-    const baseStr = `Starting ${formatMoney(summary.baseBalance)} + Income ${formatMoney(summary.totalIncome)} − Expenses ${formatMoney(summary.totalExpenses)}`;
+    const tx = summary.totalInvestmentTransfers || 0;
+    const txPart = tx > 0
+      ? ` + Sold Inv ${formatMoney(tx)}`
+      : tx < 0
+        ? ` − Invested ${formatMoney(Math.abs(tx))}`
+        : '';
+    const baseStr = `Starting ${formatMoney(summary.baseBalance)} + Income ${formatMoney(summary.totalIncome)} − Expenses ${formatMoney(summary.totalExpenses)}${txPart}`;
     $('hero-formula').textContent = deduct
       ? `${baseStr} − Investments ${formatMoney(summary.totalInvestments)}`
       : baseStr;
@@ -488,6 +498,15 @@
       card.classList.toggle('is-active', card.dataset.invFoldCard === ui.invFold);
     });
 
+    const syncEnabled = Boolean(state.settings.syncInvestmentsWithBalance);
+    $('sync-investments-toggle').checked = syncEnabled;
+    $('bond-adjust-balance').checked = syncEnabled;
+    $('etf-adjust-balance').checked = syncEnabled;
+    if (!ui.editingStockId) {
+      $('stock-adjust-balance').checked = syncEnabled;
+      updateStockPreview();
+    }
+
     renderBondsList();
     renderEtfsList();
     renderStocksList();
@@ -518,13 +537,23 @@
 
       const right = el('div', 'item-right');
       right.appendChild(el('span', 'item-amount tabular-nums', formatMoney(bond.amount)));
+      const actions = el('div', 'item-actions');
+      const sellBtn = el('button', 'btn btn-ghost btn-xs', 'Redeem');
+      sellBtn.type = 'button';
+      sellBtn.title = 'Remove bond and add principal back to Main Balance';
+      sellBtn.addEventListener('click', () => {
+        state = Store.sellBond(state, bond.id, true);
+        persistAndRender();
+      });
       const delBtn = el('button', 'btn btn-ghost btn-xs', 'Delete');
       delBtn.type = 'button';
       delBtn.addEventListener('click', () => {
         state = Store.deleteBond(state, bond.id);
         persistAndRender();
       });
-      right.appendChild(delBtn);
+      actions.appendChild(sellBtn);
+      actions.appendChild(delBtn);
+      right.appendChild(actions);
 
       row.appendChild(main);
       row.appendChild(right);
@@ -561,13 +590,23 @@
 
       const right = el('div', 'item-right');
       right.appendChild(el('span', 'item-amount tabular-nums', formatMoney(currentVal)));
+      const actions = el('div', 'item-actions');
+      const sellEtfBtn = el('button', 'btn btn-ghost btn-xs', 'Sell');
+      sellEtfBtn.type = 'button';
+      sellEtfBtn.title = 'Remove ETF and add current value to Main Balance';
+      sellEtfBtn.addEventListener('click', () => {
+        state = Store.sellEtf(state, etf.id, true);
+        persistAndRender();
+      });
       const delEtfBtn = el('button', 'btn btn-ghost btn-xs', 'Remove');
       delEtfBtn.type = 'button';
       delEtfBtn.addEventListener('click', () => {
         state = Store.deleteEtf(state, etf.id);
         persistAndRender();
       });
-      right.appendChild(delEtfBtn);
+      actions.appendChild(sellEtfBtn);
+      actions.appendChild(delEtfBtn);
+      right.appendChild(actions);
 
       header.appendChild(left);
       header.appendChild(right);
@@ -625,6 +664,17 @@
       card.appendChild(fundsWrap);
 
       const addFundForm = el('form', 'etf-add-fund-form');
+      const inputsRow = el('div', 'etf-fund-inputs');
+
+      const modeSelect = el('select');
+      modeSelect.setAttribute('aria-label', `Action for ${etf.name}`);
+      const optBuy = el('option', '', 'Invest');
+      optBuy.value = 'invest';
+      const optSell = el('option', '', 'Withdraw');
+      optSell.value = 'withdraw';
+      modeSelect.appendChild(optBuy);
+      modeSelect.appendChild(optSell);
+
       const labelInput = el('input');
       labelInput.type = 'text';
       labelInput.placeholder = 'Fund / tranche label';
@@ -639,20 +689,48 @@
       amtInput.required = true;
       amtInput.setAttribute('aria-label', `Fund amount for ${etf.name}`);
 
-      const addBtn = el('button', 'btn btn-secondary btn-xs', '+ Add Funds');
+      const addBtn = el('button', 'btn btn-secondary btn-xs', 'Apply');
       addBtn.type = 'submit';
 
-      addFundForm.appendChild(labelInput);
-      addFundForm.appendChild(amtInput);
-      addFundForm.appendChild(addBtn);
+      inputsRow.appendChild(modeSelect);
+      inputsRow.appendChild(labelInput);
+      inputsRow.appendChild(amtInput);
+      inputsRow.appendChild(addBtn);
+
+      const adjustLabel = el('label', 'checkbox-row checkbox-compact');
+      const adjustCheck = el('input');
+      adjustCheck.type = 'checkbox';
+      adjustCheck.checked = Boolean(state.settings.syncInvestmentsWithBalance);
+      const adjustSpan = el('span', '', 'Subtract from Main Balance');
+      adjustLabel.appendChild(adjustCheck);
+      adjustLabel.appendChild(adjustSpan);
+
+      modeSelect.addEventListener('change', () => {
+        adjustSpan.textContent = modeSelect.value === 'withdraw'
+          ? 'Add withdrawal back to Main Balance'
+          : 'Subtract from Main Balance';
+      });
+
+      addFundForm.appendChild(inputsRow);
+      addFundForm.appendChild(adjustLabel);
 
       addFundForm.addEventListener('submit', (e) => {
         e.preventDefault();
-        state = Store.addEtfFund(state, etf.id, {
-          label: labelInput.value,
-          amount: amtInput.value,
-          date: Store.todayISO()
-        });
+        if (modeSelect.value === 'withdraw') {
+          state = Store.withdrawEtf(state, etf.id, {
+            label: labelInput.value,
+            amount: amtInput.value,
+            date: Store.todayISO(),
+            adjustBalance: adjustCheck.checked
+          });
+        } else {
+          state = Store.addEtfFund(state, etf.id, {
+            label: labelInput.value,
+            amount: amtInput.value,
+            date: Store.todayISO(),
+            adjustBalance: adjustCheck.checked
+          });
+        }
         persistAndRender();
       });
 
@@ -698,6 +776,15 @@
       editBtn.type = 'button';
       editBtn.addEventListener('click', () => startEditStock(stock));
 
+      const sellBtn = el('button', 'btn btn-ghost btn-xs', 'Sell');
+      sellBtn.type = 'button';
+      sellBtn.title = 'Sell all shares and add proceeds to Main Balance';
+      sellBtn.addEventListener('click', () => {
+        if (ui.editingStockId === stock.id) cancelEditStock();
+        state = Store.sellStock(state, stock.id, true);
+        persistAndRender();
+      });
+
       const delBtn = el('button', 'btn btn-ghost btn-xs', 'Delete');
       delBtn.type = 'button';
       delBtn.addEventListener('click', () => {
@@ -707,6 +794,7 @@
       });
 
       actions.appendChild(editBtn);
+      actions.appendChild(sellBtn);
       actions.appendChild(delBtn);
       right.appendChild(actions);
 
@@ -719,10 +807,40 @@
   function updateStockPreview() {
     const shares = Number($('stock-shares').value);
     const price = Number($('stock-price').value);
+    const buyPriceVal = $('stock-buy-price').value;
+    const buyPrice = buyPriceVal !== '' ? Number(buyPriceVal) : null;
     const total = Number.isFinite(shares) && shares > 0 && Number.isFinite(price) && price >= 0
       ? Store.roundMoney(shares * price)
       : 0;
     $('stock-preview-total').textContent = formatMoney(total);
+
+    const impactEl = $('stock-cash-impact');
+    if (!impactEl) return;
+
+    if (ui.editingStockId) {
+      const existing = state.investments.stocks.find((s) => s.id === ui.editingStockId);
+      if (existing && Number.isFinite(shares) && shares > 0 && Number.isFinite(price) && price >= 0) {
+        const delta = Math.round((shares - existing.shares) * 1000000) / 1000000;
+        if (delta > 0) {
+          const cost = Store.roundMoney(delta * price);
+          impactEl.textContent = `Adjust Main Balance (buying +${formatShares(delta)} → −${formatMoney(cost)})`;
+        } else if (delta < 0) {
+          const proceeds = Store.roundMoney(Math.abs(delta) * price);
+          impactEl.textContent = `Adjust Main Balance (selling ${formatShares(Math.abs(delta))} → +${formatMoney(proceeds)})`;
+        } else {
+          impactEl.textContent = 'Price update only (S$0.00 Main Balance change)';
+        }
+        return;
+      }
+    }
+
+    const unitCost = buyPrice !== null && Number.isFinite(buyPrice) && buyPrice >= 0 ? buyPrice : price;
+    const cost = Number.isFinite(shares) && shares > 0 && Number.isFinite(unitCost) && unitCost >= 0
+      ? Store.roundMoney(shares * unitCost)
+      : 0;
+    impactEl.textContent = cost > 0
+      ? `Subtract ${formatMoney(cost)} from Main Balance`
+      : 'Subtract purchase cost from Main Balance';
   }
 
   function startEditStock(stock) {
@@ -733,6 +851,7 @@
     $('stock-shares').value = stock.shares;
     $('stock-price').value = stock.pricePerShare;
     $('stock-buy-price').value = stock.buyPrice !== null && stock.buyPrice !== undefined ? stock.buyPrice : '';
+    $('stock-adjust-balance').checked = Boolean(state.settings.syncInvestmentsWithBalance);
     $('stock-submit-btn').textContent = 'Save Stock';
     $('cancel-edit-stock').classList.remove('hidden');
     updateStockPreview();
@@ -743,6 +862,7 @@
     ui.editingStockId = null;
     $('stock-edit-id').value = '';
     $('stock-form').reset();
+    $('stock-adjust-balance').checked = Boolean(state.settings.syncInvestmentsWithBalance);
     $('stock-submit-btn').textContent = 'Add Stock';
     $('cancel-edit-stock').classList.add('hidden');
     updateStockPreview();
@@ -1105,28 +1225,56 @@
     list.textContent = '';
     if (state.balance.incomes.length === 0) {
       list.appendChild(el('div', 'empty-state', 'No income entries logged yet.'));
-      return;
+    } else {
+      for (const inc of state.balance.incomes) {
+        const row = el('div', 'item-row');
+        const main = el('div', 'item-main');
+        main.appendChild(el('div', 'item-title-line', inc.label));
+        main.appendChild(el('div', 'item-meta', inc.date));
+
+        const right = el('div', 'item-right');
+        right.appendChild(el('span', 'item-amount metric-accent tabular-nums', `+${formatMoney(inc.amount)}`));
+        const delBtn = el('button', 'btn btn-ghost btn-xs', 'Delete');
+        delBtn.type = 'button';
+        delBtn.addEventListener('click', () => {
+          state = Store.deleteIncome(state, inc.id);
+          persistAndRender();
+        });
+        right.appendChild(delBtn);
+
+        row.appendChild(main);
+        row.appendChild(right);
+        list.appendChild(row);
+      }
     }
 
-    for (const inc of state.balance.incomes) {
-      const row = el('div', 'item-row');
-      const main = el('div', 'item-main');
-      main.appendChild(el('div', 'item-title-line', inc.label));
-      main.appendChild(el('div', 'item-meta', inc.date));
+    const txList = $('transfer-list');
+    txList.textContent = '';
+    const transfers = state.balance.investmentTransfers || [];
+    if (transfers.length === 0) {
+      txList.appendChild(el('div', 'empty-state', 'No investment cash transfers yet.'));
+    } else {
+      for (const tx of transfers) {
+        const row = el('div', 'item-row');
+        const main = el('div', 'item-main');
+        main.appendChild(el('div', 'item-title-line', tx.label));
+        main.appendChild(el('div', 'item-meta', tx.date));
 
-      const right = el('div', 'item-right');
-      right.appendChild(el('span', 'item-amount metric-accent tabular-nums', `+${formatMoney(inc.amount)}`));
-      const delBtn = el('button', 'btn btn-ghost btn-xs', 'Delete');
-      delBtn.type = 'button';
-      delBtn.addEventListener('click', () => {
-        state = Store.deleteIncome(state, inc.id);
-        persistAndRender();
-      });
-      right.appendChild(delBtn);
+        const right = el('div', 'item-right');
+        const amtClass = `item-amount tabular-nums ${tx.amount >= 0 ? 'metric-accent' : 'metric-danger'}`;
+        right.appendChild(el('span', amtClass, formatSignedMoney(tx.amount)));
+        const delBtn = el('button', 'btn btn-ghost btn-xs', 'Undo');
+        delBtn.type = 'button';
+        delBtn.addEventListener('click', () => {
+          state = Store.deleteInvestmentTransfer(state, tx.id);
+          persistAndRender();
+        });
+        right.appendChild(delBtn);
 
-      row.appendChild(main);
-      row.appendChild(right);
-      list.appendChild(row);
+        row.appendChild(main);
+        row.appendChild(right);
+        txList.appendChild(row);
+      }
     }
   }
 
@@ -1377,6 +1525,17 @@
       });
     });
 
+    $('sync-investments-toggle').addEventListener('change', (e) => {
+      state = {
+        ...state,
+        settings: {
+          ...state.settings,
+          syncInvestmentsWithBalance: e.target.checked
+        }
+      };
+      persistAndRender();
+    });
+
     // Bond Form
     $('bond-form').addEventListener('submit', (e) => {
       e.preventDefault();
@@ -1385,7 +1544,8 @@
         amount: $('bond-amount').value,
         yieldRate: $('bond-yield').value,
         maturityDate: $('bond-maturity').value,
-        note: $('bond-note').value
+        note: $('bond-note').value,
+        adjustBalance: $('bond-adjust-balance').checked
       });
       e.target.reset();
       persistAndRender();
@@ -1399,7 +1559,8 @@
         ticker: $('etf-ticker').value,
         fundLabel: $('etf-fund-label').value,
         initialAmount: $('etf-initial-amount').value,
-        date: Store.todayISO()
+        date: Store.todayISO(),
+        adjustBalance: $('etf-adjust-balance').checked
       });
       e.target.reset();
       persistAndRender();
@@ -1408,6 +1569,7 @@
     // Stock Form
     $('stock-shares').addEventListener('input', updateStockPreview);
     $('stock-price').addEventListener('input', updateStockPreview);
+    $('stock-buy-price').addEventListener('input', updateStockPreview);
     $('cancel-edit-stock').addEventListener('click', cancelEditStock);
     $('stock-form').addEventListener('submit', (e) => {
       e.preventDefault();
@@ -1416,7 +1578,8 @@
         ticker: $('stock-ticker').value,
         shares: $('stock-shares').value,
         pricePerShare: $('stock-price').value,
-        buyPrice: $('stock-buy-price').value
+        buyPrice: $('stock-buy-price').value,
+        adjustBalance: $('stock-adjust-balance').checked
       };
       if (ui.editingStockId) {
         state = Store.updateStock(state, ui.editingStockId, payload);
