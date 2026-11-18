@@ -91,7 +91,7 @@ test('rejects invalid category, subcategory, or tag on addExpense', () => {
       subcategory: 'meals',
       tag: 'business'
     });
-  }, /personal or family/);
+  }, /Invalid expense tag/);
 });
 
 test('supports updating and deleting expenses', () => {
@@ -235,6 +235,44 @@ test('persists to storage interface and exports valid CSV', () => {
   const csv = Store.exportExpensesCsv(loaded.expenses);
   assert.ok(csv.startsWith('Date,Category,Subcategory,Tag,Amount,Note\n'));
   assert.ok(csv.includes(',food,meals,personal,'));
+});
+
+test('supports adding, deleting, and persisting custom subcategories and tags', () => {
+  let state = Store.createEmptyState();
+  const subRes = Store.addCustomSubcategory(state, 'food', 'Coffee');
+  state = subRes.state;
+  const tagRes = Store.addCustomTag(state, 'Work');
+  state = tagRes.state;
+
+  assert.equal(subRes.subcategory.id, 'coffee');
+  assert.equal(tagRes.tag.id, 'work');
+
+  state = Store.addExpense(state, {
+    amount: 7.5,
+    category: 'food',
+    subcategory: 'coffee',
+    tag: 'work',
+    date: '2026-11-18',
+    note: 'Client coffee'
+  });
+
+  const restored = Store.normalizeState(JSON.parse(JSON.stringify(state)));
+  assert.equal(restored.expenses.length, 1);
+  assert.equal(restored.expenses[0].subcategory, 'coffee');
+  assert.equal(restored.expenses[0].tag, 'work');
+
+  const summary = Store.computeSummary(restored);
+  assert.equal(summary.byTag.work, 7.5);
+  assert.equal(summary.byCategory.food.subcategories.coffee, 7.5);
+
+  const analysis = Store.computeAnalysis(restored);
+  assert.equal(analysis.topSubcategory.label, 'Coffee');
+  assert.equal(analysis.monthlyExpenses[0].tags.work, 7.5);
+
+  state = Store.deleteCustomSubcategory(restored, 'food', 'coffee');
+  state = Store.deleteCustomTag(state, 'work');
+  assert.equal(state.customSubcategories.food.length, 0);
+  assert.equal(state.customTags.length, 0);
 });
 
 let passed = 0;

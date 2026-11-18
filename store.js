@@ -62,8 +62,17 @@
   ];
 
   const EXPENSE_TAGS = [
-    { id: 'personal', label: 'Personal' },
-    { id: 'family', label: 'Family' }
+    { id: 'personal', label: 'Personal', color: '#3b82f6' },
+    { id: 'family', label: 'Family', color: '#a855f7' }
+  ];
+
+  const CUSTOM_TAG_COLORS = [
+    '#f59e0b',
+    '#14b8a6',
+    '#ef4444',
+    '#ec4899',
+    '#6366f1',
+    '#84cc16'
   ];
 
   const CURRENCIES = [
@@ -120,6 +129,14 @@
     return `${isNeg ? '-' : ''}${info.symbol}${formatted}`;
   }
 
+  function createEmptyCustomSubcategories() {
+    const map = {};
+    for (const cat of EXPENSE_CATEGORIES) {
+      map[cat.id] = [];
+    }
+    return map;
+  }
+
   function createEmptyState() {
     return {
       version: SCHEMA_VERSION,
@@ -128,6 +145,8 @@
         deductInvestmentsFromBalance: false,
         theme: 'system'
       },
+      customSubcategories: createEmptyCustomSubcategories(),
+      customTags: [],
       balance: {
         baseAmount: 0,
         incomes: []
@@ -142,18 +161,65 @@
     };
   }
 
+  function slugifyLabel(label) {
+    const slug = String(label || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+    return slug || `custom_${Date.now().toString(36)}`;
+  }
+
   function getCategory(categoryId) {
     return EXPENSE_CATEGORIES.find((c) => c.id === categoryId) || null;
   }
 
-  function isValidCategorySubcategory(categoryId, subcategoryId) {
+  function getSubcategoriesForCategory(state, categoryId) {
     const cat = getCategory(categoryId);
-    if (!cat) return false;
-    return cat.subcategories.some((s) => s.id === subcategoryId);
+    if (!cat) return [];
+    const custom = state && state.customSubcategories && Array.isArray(state.customSubcategories[categoryId])
+      ? state.customSubcategories[categoryId]
+      : [];
+    return [
+      ...cat.subcategories.map((s) => ({ ...s, isCustom: false })),
+      ...custom.map((s) => ({ ...s, isCustom: true }))
+    ];
   }
 
-  function isValidTag(tagId) {
-    return EXPENSE_TAGS.some((t) => t.id === tagId);
+  function getAllTags(state) {
+    const custom = state && Array.isArray(state.customTags) ? state.customTags : [];
+    return [
+      ...EXPENSE_TAGS.map((t) => ({ ...t, isCustom: false })),
+      ...custom.map((t) => ({ ...t, isCustom: true }))
+    ];
+  }
+
+  function getSubcategoryLabel(state, categoryId, subcategoryId) {
+    const found = getSubcategoriesForCategory(state, categoryId).find((s) => s.id === subcategoryId);
+    return found ? found.label : subcategoryId;
+  }
+
+  function getTagInfo(state, tagId) {
+    const found = getAllTags(state).find((t) => t.id === tagId);
+    return found || { id: tagId, label: tagId, color: '#64748b', isCustom: true };
+  }
+
+  function isValidCategorySubcategory(categoryId, subcategoryId, customSubcategories) {
+    const cat = getCategory(categoryId);
+    if (!cat) return false;
+    if (cat.subcategories.some((s) => s.id === subcategoryId)) return true;
+    if (customSubcategories && Array.isArray(customSubcategories[categoryId])) {
+      return customSubcategories[categoryId].some((s) => s.id === subcategoryId);
+    }
+    return false;
+  }
+
+  function isValidTag(tagId, customTags) {
+    if (EXPENSE_TAGS.some((t) => t.id === tagId)) return true;
+    if (Array.isArray(customTags)) {
+      return customTags.some((t) => t.id === tagId);
+    }
+    return false;
   }
 
   function normalizeState(raw) {
@@ -168,6 +234,45 @@
       if (['light', 'dark', 'system'].includes(raw.settings.theme)) {
         base.settings.theme = raw.settings.theme;
       }
+    }
+
+    if (raw.customSubcategories && typeof raw.customSubcategories === 'object') {
+      for (const cat of EXPENSE_CATEGORIES) {
+        const list = raw.customSubcategories[cat.id];
+        if (!Array.isArray(list)) continue;
+        const seenIds = new Set(cat.subcategories.map((s) => s.id));
+        base.customSubcategories[cat.id] = list
+          .filter((s) => s && typeof s === 'object' && String(s.label || '').trim())
+          .map((s) => {
+            const label = String(s.label).trim().slice(0, 40);
+            const id = typeof s.id === 'string' && s.id.trim() ? s.id.trim() : slugifyLabel(label);
+            return { id, label };
+          })
+          .filter((s) => {
+            if (seenIds.has(s.id)) return false;
+            seenIds.add(s.id);
+            return true;
+          });
+      }
+    }
+
+    if (Array.isArray(raw.customTags)) {
+      const seenTagIds = new Set(EXPENSE_TAGS.map((t) => t.id));
+      base.customTags = raw.customTags
+        .filter((t) => t && typeof t === 'object' && String(t.label || '').trim())
+        .map((t, idx) => {
+          const label = String(t.label).trim().slice(0, 32);
+          const id = typeof t.id === 'string' && t.id.trim() ? t.id.trim() : slugifyLabel(label);
+          const color = typeof t.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(t.color)
+            ? t.color
+            : CUSTOM_TAG_COLORS[idx % CUSTOM_TAG_COLORS.length];
+          return { id, label, color };
+        })
+        .filter((t) => {
+          if (seenTagIds.has(t.id)) return false;
+          seenTagIds.add(t.id);
+          return true;
+        });
     }
 
     if (raw.balance && typeof raw.balance === 'object') {
@@ -191,8 +296,8 @@
           exp &&
           typeof exp === 'object' &&
           toPositiveNumber(exp.amount) > 0 &&
-          isValidCategorySubcategory(exp.category, exp.subcategory) &&
-          isValidTag(exp.tag)
+          isValidCategorySubcategory(exp.category, exp.subcategory, base.customSubcategories) &&
+          isValidTag(exp.tag, base.customTags)
         ))
         .map((exp) => ({
           id: typeof exp.id === 'string' && exp.id ? exp.id : createId('exp'),
@@ -363,11 +468,16 @@
     );
     const netWorth = roundMoney(cashBalance + totalInvestments);
 
+    const allTags = getAllTags(state);
     const byCategory = {};
     for (const cat of EXPENSE_CATEGORIES) {
       const subTotals = {};
-      for (const sub of cat.subcategories) {
+      for (const sub of getSubcategoriesForCategory(state, cat.id)) {
         subTotals[sub.id] = 0;
+      }
+      const catTagTotals = {};
+      for (const t of allTags) {
+        catTagTotals[t.id] = 0;
       }
       byCategory[cat.id] = {
         id: cat.id,
@@ -377,14 +487,15 @@
         count: 0,
         personal: 0,
         family: 0,
+        tags: catTagTotals,
         subcategories: subTotals
       };
     }
 
-    const byTag = {
-      personal: 0,
-      family: 0
-    };
+    const byTag = {};
+    for (const t of allTags) {
+      byTag[t.id] = 0;
+    }
 
     for (const exp of state.expenses) {
       const amt = roundMoney(exp.amount);
@@ -394,13 +505,10 @@
         bucket.count += 1;
         if (exp.tag === 'personal') bucket.personal = roundMoney(bucket.personal + amt);
         if (exp.tag === 'family') bucket.family = roundMoney(bucket.family + amt);
-        if (Object.prototype.hasOwnProperty.call(bucket.subcategories, exp.subcategory)) {
-          bucket.subcategories[exp.subcategory] = roundMoney(bucket.subcategories[exp.subcategory] + amt);
-        }
+        bucket.tags[exp.tag] = roundMoney((bucket.tags[exp.tag] || 0) + amt);
+        bucket.subcategories[exp.subcategory] = roundMoney((bucket.subcategories[exp.subcategory] || 0) + amt);
       }
-      if (Object.prototype.hasOwnProperty.call(byTag, exp.tag)) {
-        byTag[exp.tag] = roundMoney(byTag[exp.tag] + amt);
-      }
+      byTag[exp.tag] = roundMoney((byTag[exp.tag] || 0) + amt);
     }
 
     return {
@@ -436,7 +544,7 @@
         ? Math.round((b.total / summary.totalExpenses) * 1000) / 10
         : 0;
       const avg = b.count > 0 ? roundMoney(b.total / b.count) : 0;
-      const subs = cat.subcategories
+      const subs = getSubcategoriesForCategory(state, cat.id)
         .map((s) => ({
           id: s.id,
           label: s.label,
@@ -453,6 +561,7 @@
         sharePct,
         personal: b.personal,
         family: b.family,
+        tags: b.tags,
         subcategories: subs
       };
     }).sort((a, b) => b.total - a.total);
@@ -479,7 +588,7 @@
       const ym = String(exp.date || '').slice(0, 7);
       if (!ym) continue;
       if (!monthMap.has(ym)) {
-        monthMap.set(ym, { month: ym, total: 0, personal: 0, family: 0, count: 0 });
+        monthMap.set(ym, { month: ym, total: 0, personal: 0, family: 0, tags: {}, count: 0 });
       }
       const m = monthMap.get(ym);
       const amt = roundMoney(exp.amount);
@@ -487,6 +596,7 @@
       m.count += 1;
       if (exp.tag === 'personal') m.personal = roundMoney(m.personal + amt);
       if (exp.tag === 'family') m.family = roundMoney(m.family + amt);
+      m.tags[exp.tag] = roundMoney((m.tags[exp.tag] || 0) + amt);
     }
     const monthlyExpenses = Array.from(monthMap.values()).sort((a, b) => a.month.localeCompare(b.month));
 
@@ -557,14 +667,95 @@
     };
   }
 
+  function addCustomSubcategory(state, categoryId, label) {
+    const cat = getCategory(categoryId);
+    if (!cat) throw new Error('Invalid expense category.');
+    const cleanLabel = String(label || '').trim().slice(0, 40);
+    if (!cleanLabel) throw new Error('Subcategory name is required.');
+
+    const existing = getSubcategoriesForCategory(state, categoryId);
+    const duplicate = existing.find((s) => s.label.toLowerCase() === cleanLabel.toLowerCase());
+    if (duplicate) {
+      return { state, subcategory: duplicate };
+    }
+
+    let id = slugifyLabel(cleanLabel);
+    const usedIds = new Set(existing.map((s) => s.id));
+    if (usedIds.has(id)) {
+      let n = 2;
+      while (usedIds.has(`${id}_${n}`)) n += 1;
+      id = `${id}_${n}`;
+    }
+
+    const nextSub = { id, label: cleanLabel };
+    const prevCustom = (state.customSubcategories && state.customSubcategories[categoryId]) || [];
+    const nextState = {
+      ...state,
+      customSubcategories: {
+        ...(state.customSubcategories || createEmptyCustomSubcategories()),
+        [categoryId]: [...prevCustom, nextSub]
+      }
+    };
+    return { state: nextState, subcategory: nextSub };
+  }
+
+  function deleteCustomSubcategory(state, categoryId, subcategoryId) {
+    const prevCustom = (state.customSubcategories && state.customSubcategories[categoryId]) || [];
+    return {
+      ...state,
+      customSubcategories: {
+        ...(state.customSubcategories || createEmptyCustomSubcategories()),
+        [categoryId]: prevCustom.filter((s) => s.id !== subcategoryId)
+      }
+    };
+  }
+
+  function addCustomTag(state, label) {
+    const cleanLabel = String(label || '').trim().slice(0, 32);
+    if (!cleanLabel) throw new Error('Tag name is required.');
+
+    const existing = getAllTags(state);
+    const duplicate = existing.find((t) => t.label.toLowerCase() === cleanLabel.toLowerCase());
+    if (duplicate) {
+      return { state, tag: duplicate };
+    }
+
+    let id = slugifyLabel(cleanLabel);
+    const usedIds = new Set(existing.map((t) => t.id));
+    if (usedIds.has(id)) {
+      let n = 2;
+      while (usedIds.has(`${id}_${n}`)) n += 1;
+      id = `${id}_${n}`;
+    }
+
+    const prevCustom = Array.isArray(state.customTags) ? state.customTags : [];
+    const color = CUSTOM_TAG_COLORS[prevCustom.length % CUSTOM_TAG_COLORS.length];
+    const nextTag = { id, label: cleanLabel, color };
+    return {
+      state: {
+        ...state,
+        customTags: [...prevCustom, nextTag]
+      },
+      tag: nextTag
+    };
+  }
+
+  function deleteCustomTag(state, tagId) {
+    const prevCustom = Array.isArray(state.customTags) ? state.customTags : [];
+    return {
+      ...state,
+      customTags: prevCustom.filter((t) => t.id !== tagId)
+    };
+  }
+
   function addExpense(state, input) {
     const amount = roundMoney(input.amount);
     if (amount <= 0) throw new Error('Expense amount must be greater than zero.');
-    if (!isValidCategorySubcategory(input.category, input.subcategory)) {
+    if (!isValidCategorySubcategory(input.category, input.subcategory, state.customSubcategories)) {
       throw new Error('Invalid expense category or subcategory.');
     }
-    if (!isValidTag(input.tag)) {
-      throw new Error('Expense tag must be personal or family.');
+    if (!isValidTag(input.tag, state.customTags)) {
+      throw new Error('Invalid expense tag.');
     }
 
     const expense = {
@@ -599,11 +790,11 @@
     };
 
     if (next.amount <= 0) throw new Error('Expense amount must be greater than zero.');
-    if (!isValidCategorySubcategory(next.category, next.subcategory)) {
+    if (!isValidCategorySubcategory(next.category, next.subcategory, state.customSubcategories)) {
       throw new Error('Invalid expense category or subcategory.');
     }
-    if (!isValidTag(next.tag)) {
-      throw new Error('Expense tag must be personal or family.');
+    if (!isValidTag(next.tag, state.customTags)) {
+      throw new Error('Invalid expense tag.');
     }
 
     const expenses = state.expenses.slice();
@@ -1086,8 +1277,16 @@
     createSampleState,
     normalizeState,
     getCategory,
+    getSubcategoriesForCategory,
+    getAllTags,
+    getSubcategoryLabel,
+    getTagInfo,
     isValidCategorySubcategory,
     isValidTag,
+    addCustomSubcategory,
+    deleteCustomSubcategory,
+    addCustomTag,
+    deleteCustomTag,
     getEtfTotal,
     getEtfCurrentValue,
     getStockTotal,

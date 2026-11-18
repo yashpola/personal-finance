@@ -93,7 +93,9 @@
 
     const catSelect = $('expense-category');
     const filterCat = $('filter-category');
+    const dialogCat = $('dialog-sub-category');
     catSelect.textContent = '';
+    dialogCat.textContent = '';
     for (const cat of Store.EXPENSE_CATEGORIES) {
       const opt = el('option', '', cat.label);
       opt.value = cat.id;
@@ -102,9 +104,14 @@
       const fOpt = el('option', '', cat.label);
       fOpt.value = cat.id;
       filterCat.appendChild(fOpt);
+
+      const dOpt = el('option', '', cat.label);
+      dOpt.value = cat.id;
+      dialogCat.appendChild(dOpt);
     }
 
     syncSubcategoryOptions();
+    renderExpenseTagOptions('personal');
     $('expense-date').value = Store.todayISO();
     $('income-date').value = Store.todayISO();
     $('snapshot-date').value = Store.todayISO();
@@ -112,16 +119,45 @@
 
   function syncSubcategoryOptions(selectedSub) {
     const catId = $('expense-category').value;
-    const cat = Store.getCategory(catId) || Store.EXPENSE_CATEGORIES[0];
+    const subs = Store.getSubcategoriesForCategory(state, catId);
     const subSelect = $('expense-subcategory');
+    const prev = selectedSub || subSelect.value;
     subSelect.textContent = '';
-    for (const sub of cat.subcategories) {
+    for (const sub of subs) {
       const opt = el('option', '', sub.label);
       opt.value = sub.id;
       subSelect.appendChild(opt);
     }
-    if (selectedSub && cat.subcategories.some((s) => s.id === selectedSub)) {
-      subSelect.value = selectedSub;
+    if (prev && subs.some((s) => s.id === prev)) {
+      subSelect.value = prev;
+    }
+  }
+
+  function renderExpenseTagOptions(selectedTag) {
+    const group = $('expense-tag-group');
+    const checked = document.querySelector('input[name="tag"]:checked');
+    const tags = Store.getAllTags(state);
+    const targetTag = selectedTag || (checked ? checked.value : 'personal');
+    const validTarget = tags.some((t) => t.id === targetTag) ? targetTag : 'personal';
+
+    group.textContent = '';
+    for (const tag of tags) {
+      const lbl = el('label', 'segment-option');
+      const input = document.createElement('input');
+      input.type = 'radio';
+      input.name = 'tag';
+      input.value = tag.id;
+      if (tag.id === validTarget) input.checked = true;
+
+      const span = el('span');
+      const dot = el('i', 'dot');
+      dot.style.backgroundColor = tag.color;
+      span.appendChild(dot);
+      span.appendChild(document.createTextNode(tag.label));
+
+      lbl.appendChild(input);
+      lbl.appendChild(span);
+      group.appendChild(lbl);
     }
   }
 
@@ -217,22 +253,47 @@
 
   function renderExpenseBreakdown(summary) {
     const total = summary.totalExpenses;
-    const personal = summary.byTag.personal;
-    const family = summary.byTag.family;
+    const allTags = Store.getAllTags(state);
 
-    $('total-personal').textContent = formatMoney(personal);
-    $('total-family').textContent = formatMoney(family);
+    const bar = $('tag-split-bar');
+    const legend = $('tag-split-legend');
+    bar.textContent = '';
+    legend.textContent = '';
 
     if (total > 0) {
-      const pPct = Math.round((personal / total) * 100);
-      const fPct = 100 - pPct;
-      $('bar-personal').style.width = `${pPct}%`;
-      $('bar-family').style.width = `${fPct}%`;
-      $('tag-split-summary').textContent = `${pPct}% Personal • ${fPct}% Family`;
+      const parts = [];
+      for (const tag of allTags) {
+        const amt = summary.byTag[tag.id] || 0;
+        const pct = Math.round((amt / total) * 100);
+        if (amt > 0) {
+          const seg = el('div', 'bar-segment');
+          seg.style.width = `${(amt / total) * 100}%`;
+          seg.style.backgroundColor = tag.color;
+          bar.appendChild(seg);
+          parts.push(`${pct}% ${tag.label}`);
+        }
+      }
+      $('tag-split-summary').textContent = parts.join(' • ');
     } else {
-      $('bar-personal').style.width = '50%';
-      $('bar-family').style.width = '50%';
+      const equalWidth = `${100 / Math.max(allTags.length, 1)}%`;
+      for (const tag of allTags) {
+        const seg = el('div', 'bar-segment');
+        seg.style.width = equalWidth;
+        seg.style.backgroundColor = tag.color;
+        bar.appendChild(seg);
+      }
       $('tag-split-summary').textContent = 'No expenses yet';
+    }
+
+    for (const tag of allTags) {
+      const amt = summary.byTag[tag.id] || 0;
+      const item = el('span', 'legend-item');
+      const dot = el('i', 'dot');
+      dot.style.backgroundColor = tag.color;
+      item.appendChild(dot);
+      item.appendChild(document.createTextNode(`${tag.label} `));
+      item.appendChild(el('strong', 'tabular-nums', formatMoney(amt)));
+      legend.appendChild(item);
     }
 
     const container = $('category-breakdown');
@@ -262,7 +323,7 @@
       track.appendChild(fill);
 
       const subs = el('div', 'cat-subs');
-      for (const sub of cat.subcategories) {
+      for (const sub of Store.getSubcategoriesForCategory(state, cat.id)) {
         const subAmt = data.subcategories[sub.id] || 0;
         subs.appendChild(el('span', 'sub-chip tabular-nums', `${sub.label}: ${formatMoney(subAmt)}`));
       }
@@ -274,8 +335,34 @@
     }
   }
 
+  function renderTagFilterPills() {
+    const wrap = $('tag-filter-pills');
+    const allTags = Store.getAllTags(state);
+    if (ui.tagFilter !== 'all' && !allTags.some((t) => t.id === ui.tagFilter)) {
+      ui.tagFilter = 'all';
+    }
+
+    wrap.textContent = '';
+    const options = [{ id: 'all', label: 'All' }, ...allTags];
+    for (const opt of options) {
+      const btn = el(
+        'button',
+        `pill-filter${ui.tagFilter === opt.id ? ' is-active' : ''}`,
+        opt.label
+      );
+      btn.type = 'button';
+      btn.addEventListener('click', () => {
+        ui.tagFilter = opt.id;
+        renderTagFilterPills();
+        renderExpenseList();
+      });
+      wrap.appendChild(btn);
+    }
+  }
+
   function renderExpenseList() {
     syncMonthFilterOptions();
+    renderTagFilterPills();
     const list = $('expense-list');
     list.textContent = '';
     const filtered = getFilteredExpenses();
@@ -290,7 +377,8 @@
 
     for (const exp of filtered) {
       const cat = Store.getCategory(exp.category);
-      const sub = cat ? cat.subcategories.find((s) => s.id === exp.subcategory) : null;
+      const subLabel = Store.getSubcategoryLabel(state, exp.category, exp.subcategory);
+      const tagInfo = Store.getTagInfo(state, exp.tag);
 
       const row = el('div', 'item-row');
       const main = el('div', 'item-main');
@@ -299,13 +387,11 @@
       const dot = el('i', 'dot');
       dot.style.backgroundColor = cat ? cat.color : '#64748b';
       titleLine.appendChild(dot);
-      titleLine.appendChild(document.createTextNode(`${cat ? cat.label : exp.category} · ${sub ? sub.label : exp.subcategory}`));
+      titleLine.appendChild(document.createTextNode(`${cat ? cat.label : exp.category} · ${subLabel}`));
 
-      const tagBadge = el(
-        'span',
-        `tag-badge ${exp.tag === 'family' ? 'tag-family' : 'tag-personal'}`,
-        exp.tag === 'family' ? 'Family' : 'Personal'
-      );
+      const tagBadge = el('span', 'tag-badge', tagInfo.label);
+      tagBadge.style.color = tagInfo.color;
+      tagBadge.style.backgroundColor = `${tagInfo.color}22`;
       titleLine.appendChild(tagBadge);
 
       const metaText = exp.note ? `${exp.date} • ${exp.note}` : exp.date;
@@ -347,8 +433,7 @@
     $('expense-date').value = exp.date;
     $('expense-category').value = exp.category;
     syncSubcategoryOptions(exp.subcategory);
-    const tagRadio = document.querySelector(`input[name="tag"][value="${exp.tag}"]`);
-    if (tagRadio) tagRadio.checked = true;
+    renderExpenseTagOptions(exp.tag);
     $('expense-note').value = exp.note || '';
     $('expense-form-title').textContent = 'Edit Expense';
     $('expense-submit-btn').textContent = 'Save Changes';
@@ -362,6 +447,7 @@
     $('expense-form').reset();
     $('expense-date').value = Store.todayISO();
     syncSubcategoryOptions();
+    renderExpenseTagOptions('personal');
     $('expense-form-title').textContent = 'Log Expense';
     $('expense-submit-btn').textContent = 'Add Expense';
     $('cancel-edit-expense').classList.add('hidden');
@@ -865,19 +951,20 @@
       monthlyWrap.appendChild(el('div', 'empty-state', 'Add expenses to see monthly spending trends.'));
     } else {
       const maxMonth = Math.max(...an.monthlyExpenses.map((m) => m.total), 1);
+      const allTags = Store.getAllTags(state);
       for (const m of an.monthlyExpenses) {
         const row = el('div', 'month-bar-row');
         row.appendChild(el('span', 'tabular-nums', m.month));
 
         const track = el('div', 'month-track');
-        const pWidth = (m.personal / maxMonth) * 100;
-        const fWidth = (m.family / maxMonth) * 100;
-        const pBar = el('div', 'bar-segment bar-personal');
-        pBar.style.width = `${pWidth}%`;
-        const fBar = el('div', 'bar-segment bar-family');
-        fBar.style.width = `${fWidth}%`;
-        track.appendChild(pBar);
-        track.appendChild(fBar);
+        for (const tag of allTags) {
+          const amt = (m.tags && m.tags[tag.id]) || 0;
+          if (amt <= 0) continue;
+          const bar = el('div', 'bar-segment');
+          bar.style.width = `${(amt / maxMonth) * 100}%`;
+          bar.style.backgroundColor = tag.color;
+          track.appendChild(bar);
+        }
 
         row.appendChild(track);
         row.appendChild(el('strong', 'tabular-nums', formatMoney(m.total)));
@@ -1062,9 +1149,61 @@
     URL.revokeObjectURL(url);
   }
 
+  function renderTaxonomyDialog() {
+    const subWrap = $('custom-subcategories-list');
+    subWrap.textContent = '';
+    let hasCustomSubs = false;
+    for (const cat of Store.EXPENSE_CATEGORIES) {
+      const customSubs = (state.customSubcategories && state.customSubcategories[cat.id]) || [];
+      for (const sub of customSubs) {
+        hasCustomSubs = true;
+        const chip = el('span', 'manage-chip');
+        chip.appendChild(document.createTextNode(`${cat.label} · ${sub.label}`));
+        const delBtn = el('button', '', '✕');
+        delBtn.type = 'button';
+        delBtn.setAttribute('aria-label', `Remove subcategory ${sub.label}`);
+        delBtn.addEventListener('click', () => {
+          state = Store.deleteCustomSubcategory(state, cat.id, sub.id);
+          persistAndRender();
+        });
+        chip.appendChild(delBtn);
+        subWrap.appendChild(chip);
+      }
+    }
+    if (!hasCustomSubs) {
+      subWrap.appendChild(el('span', 'muted', 'No custom subcategories added yet.'));
+    }
+
+    const tagWrap = $('custom-tags-list');
+    tagWrap.textContent = '';
+    const customTags = state.customTags || [];
+    if (customTags.length === 0) {
+      tagWrap.appendChild(el('span', 'muted', 'No custom tags added yet.'));
+    } else {
+      for (const tag of customTags) {
+        const chip = el('span', 'manage-chip');
+        const dot = el('i', 'dot');
+        dot.style.backgroundColor = tag.color;
+        chip.appendChild(dot);
+        chip.appendChild(document.createTextNode(tag.label));
+        const delBtn = el('button', '', '✕');
+        delBtn.type = 'button';
+        delBtn.setAttribute('aria-label', `Remove tag ${tag.label}`);
+        delBtn.addEventListener('click', () => {
+          state = Store.deleteCustomTag(state, tag.id);
+          persistAndRender();
+        });
+        chip.appendChild(delBtn);
+        tagWrap.appendChild(chip);
+      }
+    }
+  }
+
   function render() {
     applyTheme();
     $('currency-select').value = state.settings.currency || 'SGD';
+    syncSubcategoryOptions();
+    renderExpenseTagOptions();
     const summary = Store.computeSummary(state);
     renderHero(summary);
     renderExpenseBreakdown(summary);
@@ -1072,6 +1211,7 @@
     renderInvestments(summary);
     renderAnalysis();
     renderBalanceDialog();
+    renderTaxonomyDialog();
   }
 
   /* Event Bindings */
@@ -1102,9 +1242,89 @@
       });
     });
 
-    // Expense Form
+    // Expense Form & Custom Subcategories/Tags
     $('expense-category').addEventListener('change', () => syncSubcategoryOptions());
     $('cancel-edit-expense').addEventListener('click', cancelEditExpense);
+
+    function commitInlineSubcategory() {
+      const catId = $('expense-category').value;
+      const label = $('new-subcategory-input').value.trim();
+      if (!label) return;
+      const res = Store.addCustomSubcategory(state, catId, label);
+      state = res.state;
+      $('new-subcategory-input').value = '';
+      $('inline-subcategory-box').classList.add('hidden');
+      Store.saveToStorage(state);
+      render();
+      syncSubcategoryOptions(res.subcategory.id);
+    }
+
+    $('toggle-add-subcategory').addEventListener('click', () => {
+      const box = $('inline-subcategory-box');
+      box.classList.toggle('hidden');
+      if (!box.classList.contains('hidden')) $('new-subcategory-input').focus();
+    });
+    $('cancel-new-subcategory').addEventListener('click', () => {
+      $('new-subcategory-input').value = '';
+      $('inline-subcategory-box').classList.add('hidden');
+    });
+    $('save-new-subcategory').addEventListener('click', commitInlineSubcategory);
+    $('new-subcategory-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        commitInlineSubcategory();
+      }
+    });
+
+    function commitInlineTag() {
+      const label = $('new-tag-input').value.trim();
+      if (!label) return;
+      const res = Store.addCustomTag(state, label);
+      state = res.state;
+      $('new-tag-input').value = '';
+      $('inline-tag-box').classList.add('hidden');
+      Store.saveToStorage(state);
+      render();
+      renderExpenseTagOptions(res.tag.id);
+    }
+
+    $('toggle-add-tag').addEventListener('click', () => {
+      const box = $('inline-tag-box');
+      box.classList.toggle('hidden');
+      if (!box.classList.contains('hidden')) $('new-tag-input').focus();
+    });
+    $('cancel-new-tag').addEventListener('click', () => {
+      $('new-tag-input').value = '';
+      $('inline-tag-box').classList.add('hidden');
+    });
+    $('save-new-tag').addEventListener('click', commitInlineTag);
+    $('new-tag-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        commitInlineTag();
+      }
+    });
+
+    $('open-taxonomy-dialog').addEventListener('click', () => {
+      renderTaxonomyDialog();
+      $('taxonomy-dialog').showModal();
+    });
+    $('dialog-subcategory-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const catId = $('dialog-sub-category').value;
+      const res = Store.addCustomSubcategory(state, catId, $('dialog-sub-label').value);
+      state = res.state;
+      $('dialog-sub-label').value = '';
+      persistAndRender();
+    });
+    $('dialog-tag-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const res = Store.addCustomTag(state, $('dialog-tag-label').value);
+      state = res.state;
+      $('dialog-tag-label').value = '';
+      persistAndRender();
+    });
+
     $('expense-form').addEventListener('submit', (e) => {
       e.preventDefault();
       const tagChecked = document.querySelector('input[name="tag"]:checked');
@@ -1129,15 +1349,6 @@
     });
 
     // Expense Filters
-    document.querySelectorAll('[data-tag-filter]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        ui.tagFilter = btn.dataset.tagFilter;
-        document.querySelectorAll('[data-tag-filter]').forEach((b) => {
-          b.classList.toggle('is-active', b === btn);
-        });
-        renderExpenseList();
-      });
-    });
     $('filter-category').addEventListener('change', (e) => {
       ui.categoryFilter = e.target.value;
       renderExpenseList();

@@ -127,9 +127,14 @@
             <div class="card">
               <div class="card-header">
                 <h2 id="expense-form-title" class="card-title">Log Expense</h2>
-                <button type="button" id="cancel-edit-expense" class="btn btn-ghost btn-xs hidden">
-                  Cancel Edit
-                </button>
+                <div class="item-actions">
+                  <button type="button" id="open-taxonomy-dialog" class="btn btn-ghost btn-xs">
+                    Manage Lists
+                  </button>
+                  <button type="button" id="cancel-edit-expense" class="btn btn-ghost btn-xs hidden">
+                    Cancel Edit
+                  </button>
+                </div>
               </div>
 
               <form id="expense-form" class="stack-form">
@@ -160,23 +165,44 @@
                     <select id="expense-category" name="category" required></select>
                   </div>
                   <div class="field">
-                    <label for="expense-subcategory">Subcategory</label>
+                    <div class="field-label-row">
+                      <label for="expense-subcategory">Subcategory</label>
+                      <button type="button" id="toggle-add-subcategory" class="btn-link">+ New</button>
+                    </div>
                     <select id="expense-subcategory" name="subcategory" required></select>
                   </div>
                 </div>
 
+                <div id="inline-subcategory-box" class="inline-add-box hidden">
+                  <input
+                    id="new-subcategory-input"
+                    type="text"
+                    maxlength="40"
+                    placeholder="New subcategory name"
+                    aria-label="New subcategory name"
+                  >
+                  <button type="button" id="save-new-subcategory" class="btn btn-primary btn-xs">Add</button>
+                  <button type="button" id="cancel-new-subcategory" class="btn btn-ghost btn-xs">Cancel</button>
+                </div>
+
                 <div class="field">
-                  <span class="field-label">Tag</span>
-                  <div class="segmented-control" role="radiogroup" aria-label="Expense tag">
-                    <label class="segment-option">
-                      <input type="radio" name="tag" value="personal" checked>
-                      <span>Personal</span>
-                    </label>
-                    <label class="segment-option">
-                      <input type="radio" name="tag" value="family">
-                      <span>Family</span>
-                    </label>
+                  <div class="field-label-row">
+                    <span class="field-label">Tag</span>
+                    <button type="button" id="toggle-add-tag" class="btn-link">+ New Tag</button>
                   </div>
+                  <div id="expense-tag-group" class="tag-pills-control" role="radiogroup" aria-label="Expense tag"></div>
+                </div>
+
+                <div id="inline-tag-box" class="inline-add-box hidden">
+                  <input
+                    id="new-tag-input"
+                    type="text"
+                    maxlength="32"
+                    placeholder="New tag name (e.g. Work, Travel)"
+                    aria-label="New tag name"
+                  >
+                  <button type="button" id="save-new-tag" class="btn btn-primary btn-xs">Add</button>
+                  <button type="button" id="cancel-new-tag" class="btn btn-ghost btn-xs">Cancel</button>
                 </div>
 
                 <div class="field">
@@ -203,17 +229,11 @@
 
               <div class="tag-split-block">
                 <div class="split-header">
-                  <span>Personal vs Family</span>
+                  <span>By Tag</span>
                   <span id="tag-split-summary" class="muted tabular-nums">No expenses yet</span>
                 </div>
-                <div class="stacked-bar" aria-label="Personal vs Family expense split">
-                  <div id="bar-personal" class="bar-segment bar-personal" style="width: 50%"></div>
-                  <div id="bar-family" class="bar-segment bar-family" style="width: 50%"></div>
-                </div>
-                <div class="split-legend">
-                  <span class="legend-item"><i class="dot dot-personal"></i> Personal <strong id="total-personal" class="tabular-nums">S$0.00</strong></span>
-                  <span class="legend-item"><i class="dot dot-family"></i> Family <strong id="total-family" class="tabular-nums">S$0.00</strong></span>
-                </div>
+                <div id="tag-split-bar" class="stacked-bar" aria-label="Expense split by tag"></div>
+                <div id="tag-split-legend" class="split-legend wrap-legend"></div>
               </div>
 
               <div id="category-breakdown" class="category-breakdown"></div>
@@ -228,11 +248,7 @@
                   <p id="expense-filter-summary" class="card-subtitle tabular-nums">0 expenses</p>
                 </div>
 
-                <div class="filter-pills" role="group" aria-label="Filter by tag">
-                  <button type="button" class="pill-filter is-active" data-tag-filter="all">All</button>
-                  <button type="button" class="pill-filter" data-tag-filter="personal">Personal</button>
-                  <button type="button" class="pill-filter" data-tag-filter="family">Family</button>
-                </div>
+                <div id="tag-filter-pills" class="filter-pills" role="group" aria-label="Filter by tag"></div>
               </div>
 
               <div class="filters-bar">
@@ -629,6 +645,47 @@
       </div>
 
       <p id="data-feedback" class="feedback-msg hidden" role="status"></p>
+    </div>
+  </dialog>
+
+  <!-- MANAGE CUSTOM SUBCATEGORIES & TAGS DIALOG -->
+  <dialog id="taxonomy-dialog" class="modal-dialog" aria-labelledby="taxonomy-dialog-title">
+    <div class="dialog-header">
+      <h2 id="taxonomy-dialog-title" class="card-title">Subcategories &amp; Tags</h2>
+      <button type="button" class="btn btn-ghost btn-xs" data-close-dialog="taxonomy-dialog" aria-label="Close dialog">✕</button>
+    </div>
+
+    <div class="dialog-body stack-form">
+      <form id="dialog-subcategory-form" class="stack-form">
+        <h3 class="section-mini-title">Add Subcategory</h3>
+        <div class="form-row-2">
+          <div class="field">
+            <label for="dialog-sub-category">Category</label>
+            <select id="dialog-sub-category"></select>
+          </div>
+          <div class="field">
+            <label for="dialog-sub-label">Subcategory Name</label>
+            <div class="input-with-btn">
+              <input id="dialog-sub-label" type="text" maxlength="40" placeholder="e.g. Coffee" required>
+              <button type="submit" class="btn btn-primary btn-sm">Add</button>
+            </div>
+          </div>
+        </div>
+      </form>
+
+      <div id="custom-subcategories-list" class="chip-manage-list"></div>
+
+      <hr class="divider">
+
+      <form id="dialog-tag-form" class="stack-form">
+        <h3 class="section-mini-title">Add Tag</h3>
+        <div class="input-with-btn">
+          <input id="dialog-tag-label" type="text" maxlength="32" placeholder="e.g. Work, Travel, Shared" required aria-label="New tag name">
+          <button type="submit" class="btn btn-primary btn-sm">Add</button>
+        </div>
+      </form>
+
+      <div id="custom-tags-list" class="chip-manage-list"></div>
     </div>
   </dialog>
 
