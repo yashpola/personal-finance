@@ -267,6 +267,16 @@
                 >
               </div>
 
+              <div id="quick-repeat-strip" class="quick-repeat-strip hidden" aria-label="Quick repeat recent expenses"></div>
+
+              <div id="repeat-banner" class="repeat-banner hidden" role="status">
+                <span id="repeat-banner-text"></span>
+                <div class="item-actions">
+                  <button type="button" id="repeat-undo-btn" class="btn btn-secondary btn-xs">Undo</button>
+                  <button type="button" id="repeat-dismiss-btn" class="btn btn-ghost btn-xs" aria-label="Dismiss notification">✕</button>
+                </div>
+              </div>
+
               <div id="expense-list" class="item-list"></div>
             </div>
           </div>
@@ -511,6 +521,21 @@
             </div>
 
             <div id="analysis-category-table" class="table-wrap"></div>
+
+            <div class="subcategory-analysis-section">
+              <div class="card-header wrap-header">
+                <div>
+                  <h3 class="section-mini-title">Subcategory Breakdown &amp; Analysis</h3>
+                  <p class="card-subtitle">Totals, averages, and shares across every subcategory</p>
+                </div>
+                <select id="analysis-sub-category-filter" class="select-compact" aria-label="Filter subcategory analysis by category">
+                  <option value="all">All Categories</option>
+                </select>
+              </div>
+
+              <div id="analysis-subcategory-bars" class="subcategory-bars"></div>
+              <div id="analysis-subcategory-table" class="table-wrap"></div>
+            </div>
 
             <div class="monthly-section">
               <h3 class="section-mini-title">Monthly Spending Trend</h3>

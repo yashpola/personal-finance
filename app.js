@@ -10,6 +10,8 @@
     categoryFilter: 'all',
     monthFilter: 'all',
     searchFilter: '',
+    analysisSubCategoryFilter: 'all',
+    lastRepeatedExpense: null,
     invFold: 'all',
     editingExpenseId: null,
     editingStockId: null
@@ -93,6 +95,7 @@
 
     const catSelect = $('expense-category');
     const filterCat = $('filter-category');
+    const analysisSubCat = $('analysis-sub-category-filter');
     const dialogCat = $('dialog-sub-category');
     catSelect.textContent = '';
     dialogCat.textContent = '';
@@ -104,6 +107,10 @@
       const fOpt = el('option', '', cat.label);
       fOpt.value = cat.id;
       filterCat.appendChild(fOpt);
+
+      const aOpt = el('option', '', cat.label);
+      aOpt.value = cat.id;
+      analysisSubCat.appendChild(aOpt);
 
       const dOpt = el('option', '', cat.label);
       dOpt.value = cat.id;
@@ -370,9 +377,70 @@
     }
   }
 
+  function triggerRepeatExpense(exp) {
+    state = Store.repeatExpense(state, exp.id, Store.todayISO());
+    const created = state.expenses[0];
+    const subLabel = Store.getSubcategoryLabel(state, exp.category, exp.subcategory);
+    const labelText = exp.note ? `${exp.note} (${subLabel})` : subLabel;
+    ui.lastRepeatedExpense = {
+      id: created.id,
+      text: `Re-logged "${labelText}" (${formatMoney(created.amount)}) for ${created.date}`
+    };
+    persistAndRender();
+  }
+
+  function renderQuickRepeatStrip() {
+    const strip = $('quick-repeat-strip');
+    strip.textContent = '';
+    if (state.expenses.length === 0) {
+      strip.classList.add('hidden');
+      return;
+    }
+
+    const seen = new Set();
+    const presets = [];
+    for (const exp of state.expenses) {
+      const key = `${exp.category}|${exp.subcategory}|${exp.tag}|${exp.amount}|${exp.note}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      presets.push(exp);
+      if (presets.length >= 4) break;
+    }
+
+    strip.classList.remove('hidden');
+    strip.appendChild(el('span', 'quick-repeat-label', 'Quick repeat:'));
+    for (const exp of presets) {
+      const cat = Store.getCategory(exp.category);
+      const subLabel = Store.getSubcategoryLabel(state, exp.category, exp.subcategory);
+      const btn = el('button', 'quick-repeat-chip tabular-nums');
+      btn.type = 'button';
+      const dot = el('i', 'dot');
+      dot.style.backgroundColor = cat ? cat.color : '#64748b';
+      btn.appendChild(dot);
+      const label = exp.note ? `${exp.note} · ${formatMoney(exp.amount)}` : `${subLabel} · ${formatMoney(exp.amount)}`;
+      btn.appendChild(document.createTextNode(label));
+      btn.title = `Re-log ${cat ? cat.label : exp.category} · ${subLabel} (${formatMoney(exp.amount)}) for today`;
+      btn.addEventListener('click', () => triggerRepeatExpense(exp));
+      strip.appendChild(btn);
+    }
+  }
+
+  function renderRepeatBanner() {
+    const banner = $('repeat-banner');
+    if (!ui.lastRepeatedExpense || !state.expenses.some((e) => e.id === ui.lastRepeatedExpense.id)) {
+      banner.classList.add('hidden');
+      ui.lastRepeatedExpense = null;
+      return;
+    }
+    $('repeat-banner-text').textContent = ui.lastRepeatedExpense.text;
+    banner.classList.remove('hidden');
+  }
+
   function renderExpenseList() {
     syncMonthFilterOptions();
     renderTagFilterPills();
+    renderQuickRepeatStrip();
+    renderRepeatBanner();
     const list = $('expense-list');
     list.textContent = '';
     const filtered = getFilteredExpenses();
@@ -414,6 +482,11 @@
       right.appendChild(el('span', 'item-amount tabular-nums', `−${formatMoney(exp.amount)}`));
 
       const actions = el('div', 'item-actions');
+      const repeatBtn = el('button', 'btn btn-ghost btn-xs', 'Repeat');
+      repeatBtn.type = 'button';
+      repeatBtn.title = 'Re-log this expense for today';
+      repeatBtn.addEventListener('click', () => triggerRepeatExpense(exp));
+
       const editBtn = el('button', 'btn btn-ghost btn-xs', 'Edit');
       editBtn.type = 'button';
       editBtn.addEventListener('click', () => startEditExpense(exp));
@@ -426,6 +499,7 @@
         persistAndRender();
       });
 
+      actions.appendChild(repeatBtn);
       actions.appendChild(editBtn);
       actions.appendChild(delBtn);
       right.appendChild(actions);
@@ -1064,6 +1138,84 @@
     table.appendChild(tbody);
     catTableWrap.appendChild(table);
 
+    // Subcategory Breakdown & Analysis
+    const subFilter = ui.analysisSubCategoryFilter || 'all';
+    const filteredSubs = an.subcategoryMatrix.filter(
+      (s) => subFilter === 'all' || s.categoryId === subFilter
+    );
+    const activeSubs = filteredSubs.filter((s) => s.total > 0);
+    const subBarsWrap = $('analysis-subcategory-bars');
+    const subTableWrap = $('analysis-subcategory-table');
+    subBarsWrap.textContent = '';
+    subTableWrap.textContent = '';
+
+    if (activeSubs.length === 0) {
+      subBarsWrap.appendChild(el('div', 'empty-state', 'No subcategory spending recorded for this selection yet.'));
+    } else {
+      const maxSub = Math.max(...activeSubs.map((s) => s.total), 1);
+      for (const s of activeSubs) {
+        const barRow = el('div', 'sub-bar-row');
+        const label = el('span', 'sub-bar-label');
+        const dot = el('i', 'dot');
+        dot.style.backgroundColor = s.categoryColor;
+        label.appendChild(dot);
+        label.appendChild(document.createTextNode(
+          subFilter === 'all' ? `${s.label} (${s.categoryLabel})` : s.label
+        ));
+
+        const track = el('div', 'cat-track');
+        const fill = el('div', 'cat-fill');
+        fill.style.width = `${(s.total / maxSub) * 100}%`;
+        fill.style.backgroundColor = s.categoryColor;
+        track.appendChild(fill);
+
+        const valLabel = el(
+          'strong',
+          'tabular-nums',
+          `${formatMoney(s.total)} (${subFilter === 'all' ? s.shareOfTotalPct : s.shareOfCategoryPct}%)`
+        );
+
+        barRow.appendChild(label);
+        barRow.appendChild(track);
+        barRow.appendChild(valLabel);
+        subBarsWrap.appendChild(barRow);
+      }
+    }
+
+    const subTable = el('table', 'data-table');
+    const subThead = el('thead');
+    const subHRow = el('tr');
+    ['Subcategory', 'Category', 'Entries', 'Avg', 'Personal', 'Family', 'Total', '% of Cat', '% of Total'].forEach((h, i) => {
+      subHRow.appendChild(el('th', i >= 2 ? 'num' : '', h));
+    });
+    subThead.appendChild(subHRow);
+    subTable.appendChild(subThead);
+
+    const subTbody = el('tbody');
+    for (const s of filteredSubs) {
+      const tr = el('tr');
+      const nameTd = el('td');
+      const wrap = el('span', 'cat-name-wrap');
+      const dot = el('i', 'dot');
+      dot.style.backgroundColor = s.categoryColor;
+      wrap.appendChild(dot);
+      wrap.appendChild(document.createTextNode(s.label));
+      nameTd.appendChild(wrap);
+
+      tr.appendChild(nameTd);
+      tr.appendChild(el('td', 'muted', s.categoryLabel));
+      tr.appendChild(el('td', 'num tabular-nums', s.count));
+      tr.appendChild(el('td', 'num tabular-nums', formatMoney(s.average)));
+      tr.appendChild(el('td', 'num tabular-nums', formatMoney(s.personal)));
+      tr.appendChild(el('td', 'num tabular-nums', formatMoney(s.family)));
+      tr.appendChild(el('td', 'num tabular-nums', formatMoney(s.total)));
+      tr.appendChild(el('td', 'num tabular-nums', `${s.shareOfCategoryPct}%`));
+      tr.appendChild(el('td', 'num tabular-nums', `${s.shareOfTotalPct}%`));
+      subTbody.appendChild(tr);
+    }
+    subTable.appendChild(subTbody);
+    subTableWrap.appendChild(subTable);
+
     // Monthly Spending Trend
     const monthlyWrap = $('analysis-monthly-trend');
     monthlyWrap.textContent = '';
@@ -1508,6 +1660,22 @@
     $('filter-search').addEventListener('input', (e) => {
       ui.searchFilter = e.target.value;
       renderExpenseList();
+    });
+
+    $('repeat-undo-btn').addEventListener('click', () => {
+      if (!ui.lastRepeatedExpense) return;
+      state = Store.deleteExpense(state, ui.lastRepeatedExpense.id);
+      ui.lastRepeatedExpense = null;
+      persistAndRender();
+    });
+    $('repeat-dismiss-btn').addEventListener('click', () => {
+      ui.lastRepeatedExpense = null;
+      renderRepeatBanner();
+    });
+
+    $('analysis-sub-category-filter').addEventListener('change', (e) => {
+      ui.analysisSubCategoryFilter = e.target.value;
+      renderAnalysis();
     });
 
     // Investments Fold Switcher

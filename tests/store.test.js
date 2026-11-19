@@ -293,45 +293,65 @@ test("supports adding, deleting, and persisting custom subcategories and tags", 
   assert.equal(state.customTags.length, 0);
 });
 
-test('adjusts main balance for future stock and ETF buys/sells while keeping existing holdings frozen', () => {
+test("adjusts main balance for future stock and ETF buys/sells while keeping existing holdings frozen", () => {
   let state = Store.createEmptyState();
   state = Store.setBaseBalance(state, 5000);
 
   // Existing holdings added without balance deduction stay frozen
   state = Store.addStock(state, {
-    company: 'DBS Group',
-    ticker: 'D05',
+    company: "DBS Group",
+    ticker: "D05",
     shares: 10,
     pricePerShare: 40,
-    adjustBalance: false
+    adjustBalance: false,
   });
   state = Store.addEtf(state, {
-    name: 'Vanguard S&P 500',
-    ticker: 'VOO',
-    fundLabel: 'Frozen Existing',
+    name: "Vanguard S&P 500",
+    ticker: "VOO",
+    fundLabel: "Frozen Existing",
     initialAmount: 2000,
-    adjustBalance: false
+    adjustBalance: false,
   });
 
   assert.equal(Store.computeSummary(state).cashBalance, 5000);
 
   // Future stock share increase subtracts cash; price-only update does not; share decrease adds cash
   const stockId = state.investments.stocks[0].id;
-  state = Store.updateStock(state, stockId, { shares: 15, pricePerShare: 40, adjustBalance: true });
+  state = Store.updateStock(state, stockId, {
+    shares: 15,
+    pricePerShare: 40,
+    adjustBalance: true,
+  });
   assert.equal(Store.computeSummary(state).cashBalance, 4800);
 
-  state = Store.updateStock(state, stockId, { shares: 15, pricePerShare: 50, adjustBalance: true });
+  state = Store.updateStock(state, stockId, {
+    shares: 15,
+    pricePerShare: 50,
+    adjustBalance: true,
+  });
   assert.equal(Store.computeSummary(state).cashBalance, 4800);
 
-  state = Store.updateStock(state, stockId, { shares: 13, pricePerShare: 50, adjustBalance: true });
+  state = Store.updateStock(state, stockId, {
+    shares: 13,
+    pricePerShare: 50,
+    adjustBalance: true,
+  });
   assert.equal(Store.computeSummary(state).cashBalance, 4900);
 
   // Future ETF fund add subtracts cash; withdraw adds cash back
   const etfId = state.investments.etfs[0].id;
-  state = Store.addEtfFund(state, etfId, { label: 'New DCA', amount: 500, adjustBalance: true });
+  state = Store.addEtfFund(state, etfId, {
+    label: "New DCA",
+    amount: 500,
+    adjustBalance: true,
+  });
   assert.equal(Store.computeSummary(state).cashBalance, 4400);
 
-  state = Store.withdrawEtf(state, etfId, { label: 'Partial sell', amount: 300, adjustBalance: true });
+  state = Store.withdrawEtf(state, etfId, {
+    label: "Partial sell",
+    amount: 300,
+    adjustBalance: true,
+  });
   assert.equal(Store.computeSummary(state).cashBalance, 4700);
   assert.equal(Store.getEtfTotal(state.investments.etfs[0]), 2200);
 
@@ -339,6 +359,63 @@ test('adjusts main balance for future stock and ETF buys/sells while keeping exi
   const restored = Store.normalizeState(JSON.parse(JSON.stringify(state)));
   assert.equal(Store.computeSummary(restored).cashBalance, 4700);
   assert.equal(restored.balance.investmentTransfers.length, 4);
+});
+
+test('supports repeating an expense and computing detailed subcategory analysis', () => {
+  let state = Store.createEmptyState();
+  state = Store.setBaseBalance(state, 1000);
+  state = Store.addExpense(state, {
+    amount: 15,
+    category: 'food',
+    subcategory: 'meals',
+    tag: 'personal',
+    date: '2026-11-01',
+    note: 'Hawker lunch'
+  });
+  const origId = state.expenses[0].id;
+  state = Store.repeatExpense(state, origId, '2026-11-19');
+
+  assert.equal(state.expenses.length, 2);
+  assert.notEqual(state.expenses[0].id, origId);
+  assert.equal(state.expenses[0].date, '2026-11-19');
+  assert.equal(state.expenses[0].amount, 15);
+  assert.equal(state.expenses[0].note, 'Hawker lunch');
+
+  state = Store.addExpense(state, {
+    amount: 10,
+    category: 'food',
+    subcategory: 'snacks',
+    tag: 'family',
+    date: '2026-11-19',
+    note: 'Pastries'
+  });
+
+  const subRes = Store.addCustomSubcategory(state, 'bills', 'Internet');
+  state = subRes.state;
+  state = Store.addExpense(state, {
+    amount: 60,
+    category: 'bills',
+    subcategory: 'internet',
+    tag: 'family',
+    date: '2026-11-19'
+  });
+
+  const analysis = Store.computeAnalysis(state);
+  const mealsRow = analysis.subcategoryMatrix.find((s) => s.categoryId === 'food' && s.id === 'meals');
+  const internetRow = analysis.subcategoryMatrix.find((s) => s.categoryId === 'bills' && s.id === 'internet');
+
+  assert.equal(mealsRow.count, 2);
+  assert.equal(mealsRow.total, 30);
+  assert.equal(mealsRow.average, 15);
+  assert.equal(mealsRow.personal, 30);
+  assert.equal(mealsRow.family, 0);
+  assert.equal(mealsRow.shareOfCategoryPct, 75);
+  assert.equal(mealsRow.shareOfTotalPct, 30);
+
+  assert.equal(internetRow.label, 'Internet');
+  assert.equal(internetRow.total, 60);
+  assert.equal(internetRow.shareOfCategoryPct, 100);
+  assert.equal(internetRow.shareOfTotalPct, 60);
 });
 
 let passed = 0;

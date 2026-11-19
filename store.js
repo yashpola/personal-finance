@@ -600,6 +600,67 @@
     allSubs.sort((a, b) => b.total - a.total);
     const topSubcategory = allSubs[0] || null;
 
+    const subStatsMap = new Map();
+    for (const cat of EXPENSE_CATEGORIES) {
+      for (const sub of getSubcategoriesForCategory(state, cat.id)) {
+        const key = `${cat.id}::${sub.id}`;
+        subStatsMap.set(key, {
+          categoryId: cat.id,
+          categoryLabel: cat.label,
+          categoryColor: cat.color,
+          id: sub.id,
+          label: sub.label,
+          total: 0,
+          count: 0,
+          average: 0,
+          personal: 0,
+          family: 0,
+          tags: {},
+          shareOfCategoryPct: 0,
+          shareOfTotalPct: 0
+        });
+      }
+    }
+
+    for (const exp of state.expenses) {
+      const key = `${exp.category}::${exp.subcategory}`;
+      if (!subStatsMap.has(key)) {
+        const cat = getCategory(exp.category);
+        subStatsMap.set(key, {
+          categoryId: exp.category,
+          categoryLabel: cat ? cat.label : exp.category,
+          categoryColor: cat ? cat.color : '#64748b',
+          id: exp.subcategory,
+          label: getSubcategoryLabel(state, exp.category, exp.subcategory),
+          total: 0,
+          count: 0,
+          average: 0,
+          personal: 0,
+          family: 0,
+          tags: {},
+          shareOfCategoryPct: 0,
+          shareOfTotalPct: 0
+        });
+      }
+      const entry = subStatsMap.get(key);
+      const amt = roundMoney(exp.amount);
+      entry.total = roundMoney(entry.total + amt);
+      entry.count += 1;
+      if (exp.tag === 'personal') entry.personal = roundMoney(entry.personal + amt);
+      if (exp.tag === 'family') entry.family = roundMoney(entry.family + amt);
+      entry.tags[exp.tag] = roundMoney((entry.tags[exp.tag] || 0) + amt);
+    }
+
+    const subcategoryMatrix = Array.from(subStatsMap.values()).map((entry) => {
+      const catTotal = (summary.byCategory[entry.categoryId] && summary.byCategory[entry.categoryId].total) || 0;
+      return {
+        ...entry,
+        average: entry.count > 0 ? roundMoney(entry.total / entry.count) : 0,
+        shareOfCategoryPct: catTotal > 0 ? Math.round((entry.total / catTotal) * 1000) / 10 : 0,
+        shareOfTotalPct: summary.totalExpenses > 0 ? Math.round((entry.total / summary.totalExpenses) * 1000) / 10 : 0
+      };
+    }).sort((a, b) => b.total - a.total);
+
     const monthMap = new Map();
     for (const exp of state.expenses) {
       const ym = String(exp.date || '').slice(0, 7);
@@ -669,6 +730,7 @@
       topCategory,
       topSubcategory,
       categoryMatrix,
+      subcategoryMatrix,
       monthlyExpenses,
       investments: {
         projectedAnnualBondIncome,
@@ -823,6 +885,25 @@
     return {
       ...state,
       expenses: state.expenses.filter((e) => e.id !== id)
+    };
+  }
+
+  function repeatExpense(state, id, date) {
+    const existing = state.expenses.find((e) => e.id === id);
+    if (!existing) throw new Error('Expense not found.');
+    const repeated = {
+      id: createId('exp'),
+      amount: existing.amount,
+      category: existing.category,
+      subcategory: existing.subcategory,
+      tag: existing.tag,
+      date: date || todayISO(),
+      note: existing.note || '',
+      createdAt: new Date().toISOString()
+    };
+    return {
+      ...state,
+      expenses: [repeated, ...state.expenses]
     };
   }
 
@@ -1493,6 +1574,7 @@
     addExpense,
     updateExpense,
     deleteExpense,
+    repeatExpense,
     setBaseBalance,
     addIncome,
     deleteIncome,
