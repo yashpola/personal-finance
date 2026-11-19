@@ -36,14 +36,38 @@
     return node;
   }
 
+  function baseCurrency() {
+    return (state.settings && state.settings.baseCurrency) || 'SGD';
+  }
+
+  function displayCurrency() {
+    return (state.settings && state.settings.currency) || 'SGD';
+  }
+
+  function fxRates() {
+    return (state.settings && state.settings.fxRates) || Store.DEFAULT_FX_RATES;
+  }
+
+  function displayAmount(baseAmt) {
+    return Store.convertAmount(baseAmt, baseCurrency(), displayCurrency(), fxRates());
+  }
+
+  function toBaseAmount(dispAmt) {
+    return Store.convertAmount(dispAmt, displayCurrency(), baseCurrency(), fxRates());
+  }
+
+  function formatDisplayOnly(dispAmt) {
+    return Store.formatCurrency(dispAmt, displayCurrency());
+  }
+
   function formatMoney(amount) {
-    return Store.formatCurrency(amount, (state.settings && state.settings.currency) || 'SGD');
+    return Store.formatCurrency(displayAmount(amount), displayCurrency());
   }
 
   function formatSignedMoney(amount) {
-    const num = Store.roundMoney(amount);
-    const prefix = num > 0 ? '+' : '';
-    return `${prefix}${formatMoney(num)}`;
+    const converted = displayAmount(amount);
+    const prefix = converted > 0 ? '+' : '';
+    return `${prefix}${Store.formatCurrency(converted, displayCurrency())}`;
   }
 
   function formatShares(shares) {
@@ -513,7 +537,7 @@
   function startEditExpense(exp) {
     ui.editingExpenseId = exp.id;
     $('expense-edit-id').value = exp.id;
-    $('expense-amount').value = exp.amount;
+    $('expense-amount').value = displayAmount(exp.amount);
     $('expense-date').value = exp.date;
     $('expense-category').value = exp.category;
     syncSubcategoryOptions(exp.subcategory);
@@ -698,7 +722,7 @@
       valInput.step = '0.01';
       valInput.min = '0';
       valInput.placeholder = 'Market val';
-      valInput.value = etf.currentValue !== null && etf.currentValue !== undefined ? etf.currentValue : '';
+      valInput.value = etf.currentValue !== null && etf.currentValue !== undefined ? displayAmount(etf.currentValue) : '';
       valInput.setAttribute('aria-label', `Current market value for ${etf.name}`);
       const valBtn = el('button', 'btn btn-secondary btn-xs', 'Update Val');
       valBtn.type = 'submit';
@@ -706,7 +730,8 @@
       valForm.appendChild(valBtn);
       valForm.addEventListener('submit', (e) => {
         e.preventDefault();
-        state = Store.setEtfCurrentValue(state, etf.id, valInput.value);
+        const nextVal = valInput.value === '' ? '' : toBaseAmount(valInput.value);
+        state = Store.setEtfCurrentValue(state, etf.id, nextVal);
         persistAndRender();
       });
       valRow.appendChild(gainSpan);
@@ -790,17 +815,18 @@
 
       addFundForm.addEventListener('submit', (e) => {
         e.preventDefault();
+        const baseAmt = toBaseAmount(amtInput.value);
         if (modeSelect.value === 'withdraw') {
           state = Store.withdrawEtf(state, etf.id, {
             label: labelInput.value,
-            amount: amtInput.value,
+            amount: baseAmt,
             date: Store.todayISO(),
             adjustBalance: adjustCheck.checked
           });
         } else {
           state = Store.addEtfFund(state, etf.id, {
             label: labelInput.value,
-            amount: amtInput.value,
+            amount: baseAmt,
             date: Store.todayISO(),
             adjustBalance: adjustCheck.checked
           });
@@ -886,7 +912,7 @@
     const total = Number.isFinite(shares) && shares > 0 && Number.isFinite(price) && price >= 0
       ? Store.roundMoney(shares * price)
       : 0;
-    $('stock-preview-total').textContent = formatMoney(total);
+    $('stock-preview-total').textContent = formatDisplayOnly(total);
 
     const impactEl = $('stock-cash-impact');
     if (!impactEl) return;
@@ -897,12 +923,12 @@
         const delta = Math.round((shares - existing.shares) * 1000000) / 1000000;
         if (delta > 0) {
           const cost = Store.roundMoney(delta * price);
-          impactEl.textContent = `Adjust Main Balance (buying +${formatShares(delta)} → −${formatMoney(cost)})`;
+          impactEl.textContent = `Adjust Main Balance (buying +${formatShares(delta)} → −${formatDisplayOnly(cost)})`;
         } else if (delta < 0) {
           const proceeds = Store.roundMoney(Math.abs(delta) * price);
-          impactEl.textContent = `Adjust Main Balance (selling ${formatShares(Math.abs(delta))} → +${formatMoney(proceeds)})`;
+          impactEl.textContent = `Adjust Main Balance (selling ${formatShares(Math.abs(delta))} → +${formatDisplayOnly(proceeds)})`;
         } else {
-          impactEl.textContent = 'Price update only (S$0.00 Main Balance change)';
+          impactEl.textContent = `Price update only (${formatDisplayOnly(0)} Main Balance change)`;
         }
         return;
       }
@@ -913,7 +939,7 @@
       ? Store.roundMoney(shares * unitCost)
       : 0;
     impactEl.textContent = cost > 0
-      ? `Subtract ${formatMoney(cost)} from Main Balance`
+      ? `Subtract ${formatDisplayOnly(cost)} from Main Balance`
       : 'Subtract purchase cost from Main Balance';
   }
 
@@ -923,8 +949,8 @@
     $('stock-company').value = stock.company;
     $('stock-ticker').value = stock.ticker || '';
     $('stock-shares').value = stock.shares;
-    $('stock-price').value = stock.pricePerShare;
-    $('stock-buy-price').value = stock.buyPrice !== null && stock.buyPrice !== undefined ? stock.buyPrice : '';
+    $('stock-price').value = displayAmount(stock.pricePerShare);
+    $('stock-buy-price').value = stock.buyPrice !== null && stock.buyPrice !== undefined ? displayAmount(stock.buyPrice) : '';
     $('stock-adjust-balance').checked = Boolean(state.settings.syncInvestmentsWithBalance);
     $('stock-submit-btn').textContent = 'Save Stock';
     $('cancel-edit-stock').classList.remove('hidden');
@@ -1370,7 +1396,7 @@
 
   /* Balance & Income Dialog */
   function renderBalanceDialog() {
-    $('base-balance-input').value = state.balance.baseAmount;
+    $('base-balance-input').value = displayAmount(state.balance.baseAmount);
     $('deduct-investments-toggle').checked = Boolean(state.settings.deductInvestmentsFromBalance);
 
     const list = $('income-list');
@@ -1499,9 +1525,80 @@
     }
   }
 
+  async function fetchJsonWithTimeout(url, ms) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ms);
+    try {
+      const resp = await fetch(url, { signal: ctrl.signal });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      return await resp.json();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function refreshFxRates(manual) {
+    const btn = $('refresh-fx-btn');
+    if (btn && manual) btn.textContent = '...';
+
+    try {
+      try {
+        const data = await fetchJsonWithTimeout('https://open.er-api.com/v6/latest/SGD', 5000);
+        if (data && data.rates) {
+          state = Store.updateFxRates(state, data.rates, 'live', Store.todayISO());
+          persistAndRender();
+          return;
+        }
+      } catch (_err) {
+        // Fallback to Frankfurter API
+      }
+
+      try {
+        const data = await fetchJsonWithTimeout('https://api.frankfurter.app/latest?from=SGD', 5000);
+        if (data && data.rates) {
+          state = Store.updateFxRates(state, { ...data.rates, SGD: 1 }, 'live', data.date || Store.todayISO());
+          persistAndRender();
+          return;
+        }
+      } catch (_err) {
+        // Fallback to static rates.json
+      }
+
+      try {
+        const data = await fetchJsonWithTimeout('rates.json', 3000);
+        if (data && data.rates) {
+          state = Store.updateFxRates(state, data.rates, 'static', data.updatedAt || Store.todayISO());
+          persistAndRender();
+          return;
+        }
+      } catch (_err) {
+        // Keep cached or embedded DEFAULT_FX_RATES
+      }
+    } finally {
+      if (btn) btn.textContent = '↻ FX';
+    }
+  }
+
+  function renderFxBadge() {
+    const badge = $('fx-rate-badge');
+    const base = baseCurrency();
+    const cur = displayCurrency();
+    const src = (state.settings && state.settings.fxSource) || 'static';
+    if (cur === base) {
+      badge.textContent = src === 'live' ? 'Live FX' : '';
+      badge.classList.toggle('hidden', src !== 'live');
+      return;
+    }
+    const rate = Store.getExchangeRate(base, cur, fxRates());
+    const formattedRate = rate >= 10 ? rate.toFixed(2) : rate.toFixed(4);
+    badge.textContent = `1 ${base} = ${formattedRate} ${cur} • ${src}`;
+    badge.classList.remove('hidden');
+  }
+
   function render() {
     applyTheme();
     $('currency-select').value = state.settings.currency || 'SGD';
+    renderFxBadge();
     syncSubcategoryOptions();
     renderExpenseTagOptions();
     const summary = Store.computeSummary(state);
@@ -1521,7 +1618,19 @@
         ...state,
         settings: { ...state.settings, currency: e.target.value }
       };
+      if (ui.editingStockId) {
+        const st = state.investments.stocks.find((s) => s.id === ui.editingStockId);
+        if (st) startEditStock(st);
+      }
+      if (ui.editingExpenseId) {
+        const ex = state.expenses.find((x) => x.id === ui.editingExpenseId);
+        if (ex) startEditExpense(ex);
+      }
       persistAndRender();
+    });
+
+    $('refresh-fx-btn').addEventListener('click', () => {
+      refreshFxRates(true);
     });
 
     $('theme-toggle').addEventListener('click', toggleTheme);
@@ -1629,7 +1738,7 @@
       e.preventDefault();
       const tagChecked = document.querySelector('input[name="tag"]:checked');
       const payload = {
-        amount: $('expense-amount').value,
+        amount: toBaseAmount($('expense-amount').value),
         date: $('expense-date').value,
         category: $('expense-category').value,
         subcategory: $('expense-subcategory').value,
@@ -1709,7 +1818,7 @@
       e.preventDefault();
       state = Store.addBond(state, {
         name: $('bond-name').value,
-        amount: $('bond-amount').value,
+        amount: toBaseAmount($('bond-amount').value),
         yieldRate: $('bond-yield').value,
         maturityDate: $('bond-maturity').value,
         note: $('bond-note').value,
@@ -1722,11 +1831,12 @@
     // ETF Form
     $('etf-form').addEventListener('submit', (e) => {
       e.preventDefault();
+      const rawInit = $('etf-initial-amount').value;
       state = Store.addEtf(state, {
         name: $('etf-name').value,
         ticker: $('etf-ticker').value,
         fundLabel: $('etf-fund-label').value,
-        initialAmount: $('etf-initial-amount').value,
+        initialAmount: rawInit !== '' ? toBaseAmount(rawInit) : '',
         date: Store.todayISO(),
         adjustBalance: $('etf-adjust-balance').checked
       });
@@ -1741,12 +1851,13 @@
     $('cancel-edit-stock').addEventListener('click', cancelEditStock);
     $('stock-form').addEventListener('submit', (e) => {
       e.preventDefault();
+      const rawBuy = $('stock-buy-price').value;
       const payload = {
         company: $('stock-company').value,
         ticker: $('stock-ticker').value,
         shares: $('stock-shares').value,
-        pricePerShare: $('stock-price').value,
-        buyPrice: $('stock-buy-price').value,
+        pricePerShare: toBaseAmount($('stock-price').value),
+        buyPrice: rawBuy !== '' ? toBaseAmount(rawBuy) : '',
         adjustBalance: $('stock-adjust-balance').checked
       };
       if (ui.editingStockId) {
@@ -1771,9 +1882,10 @@
 
     $('snapshot-form').addEventListener('submit', (e) => {
       e.preventDefault();
+      const rawSnapTotal = $('snapshot-total').value;
       state = Store.addInvestmentSnapshot(state, {
         date: $('snapshot-date').value,
-        total: $('snapshot-total').value,
+        total: rawSnapTotal !== '' ? toBaseAmount(rawSnapTotal) : '',
         note: $('snapshot-note').value
       });
       $('snapshot-total').value = '';
@@ -1813,7 +1925,7 @@
     // Balance & Income Actions
     $('base-balance-form').addEventListener('submit', (e) => {
       e.preventDefault();
-      state = Store.setBaseBalance(state, $('base-balance-input').value);
+      state = Store.setBaseBalance(state, toBaseAmount($('base-balance-input').value));
       persistAndRender();
     });
 
@@ -1832,7 +1944,7 @@
       e.preventDefault();
       state = Store.addIncome(state, {
         label: $('income-label').value,
-        amount: $('income-amount').value,
+        amount: toBaseAmount($('income-amount').value),
         date: $('income-date').value
       });
       $('income-label').value = '';
@@ -1896,4 +2008,5 @@
   initStaticControls();
   bindEvents();
   render();
+  refreshFxRates(false);
 })();

@@ -86,6 +86,17 @@
     { code: 'JPY', symbol: '¥', label: 'JPY (¥)' }
   ];
 
+  const DEFAULT_FX_RATES = {
+    SGD: 1,
+    USD: 0.746,
+    EUR: 0.692,
+    GBP: 0.585,
+    INR: 63.15,
+    CAD: 1.042,
+    AUD: 1.145,
+    JPY: 114.8
+  };
+
   function createId(prefix) {
     const rand = Math.random().toString(36).slice(2, 8);
     return `${prefix}_${Date.now().toString(36)}_${rand}`;
@@ -115,6 +126,48 @@
     return CURRENCIES.find((c) => c.code === code) || CURRENCIES[0];
   }
 
+  function sanitizeFxRates(rawRates) {
+    const clean = { ...DEFAULT_FX_RATES };
+    if (rawRates && typeof rawRates === 'object') {
+      for (const c of CURRENCIES) {
+        const val = Number(rawRates[c.code]);
+        if (Number.isFinite(val) && val > 0) {
+          clean[c.code] = val;
+        }
+      }
+    }
+    clean.SGD = 1;
+    return clean;
+  }
+
+  function getExchangeRate(fromCode, toCode, rates) {
+    if (!fromCode || !toCode || fromCode === toCode) return 1;
+    const map = sanitizeFxRates(rates);
+    const rFrom = map[fromCode] || 1;
+    const rTo = map[toCode] || 1;
+    return rTo / rFrom;
+  }
+
+  function convertAmount(amount, fromCode, toCode, rates) {
+    const num = Number(amount);
+    if (!Number.isFinite(num)) return 0;
+    if (!fromCode || !toCode || fromCode === toCode) return roundMoney(num);
+    const rate = getExchangeRate(fromCode, toCode, rates);
+    return roundMoney(num * rate);
+  }
+
+  function updateFxRates(state, rates, source, updatedAt) {
+    return {
+      ...state,
+      settings: {
+        ...state.settings,
+        fxRates: sanitizeFxRates(rates),
+        fxSource: source || 'live',
+        fxUpdatedAt: updatedAt || todayISO()
+      }
+    };
+  }
+
   function formatCurrency(amount, currencyCode) {
     const info = getCurrencyInfo(currencyCode || 'SGD');
     const num = Number(amount);
@@ -142,6 +195,10 @@
       version: SCHEMA_VERSION,
       settings: {
         currency: 'SGD',
+        baseCurrency: 'SGD',
+        fxRates: { ...DEFAULT_FX_RATES },
+        fxSource: 'static',
+        fxUpdatedAt: '2026-11-19',
         deductInvestmentsFromBalance: false,
         syncInvestmentsWithBalance: false,
         theme: 'system'
@@ -231,6 +288,18 @@
     if (raw.settings && typeof raw.settings === 'object') {
       if (CURRENCIES.some((c) => c.code === raw.settings.currency)) {
         base.settings.currency = raw.settings.currency;
+      }
+      if (CURRENCIES.some((c) => c.code === raw.settings.baseCurrency)) {
+        base.settings.baseCurrency = raw.settings.baseCurrency;
+      }
+      if (raw.settings.fxRates && typeof raw.settings.fxRates === 'object') {
+        base.settings.fxRates = sanitizeFxRates(raw.settings.fxRates);
+      }
+      if (typeof raw.settings.fxSource === 'string' && raw.settings.fxSource) {
+        base.settings.fxSource = raw.settings.fxSource;
+      }
+      if (typeof raw.settings.fxUpdatedAt === 'string' && raw.settings.fxUpdatedAt) {
+        base.settings.fxUpdatedAt = raw.settings.fxUpdatedAt;
       }
       base.settings.deductInvestmentsFromBalance = Boolean(raw.settings.deductInvestmentsFromBalance);
       base.settings.syncInvestmentsWithBalance = Boolean(raw.settings.syncInvestmentsWithBalance);
@@ -1547,9 +1616,13 @@
     EXPENSE_CATEGORIES,
     EXPENSE_TAGS,
     CURRENCIES,
+    DEFAULT_FX_RATES,
     todayISO,
     roundMoney,
     getCurrencyInfo,
+    getExchangeRate,
+    convertAmount,
+    updateFxRates,
     formatCurrency,
     createEmptyState,
     createSampleState,

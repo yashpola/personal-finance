@@ -418,6 +418,28 @@ test('supports repeating an expense and computing detailed subcategory analysis'
   assert.equal(internetRow.shareOfTotalPct, 60);
 });
 
+test('converts currencies accurately and loads valid static rates.json fallback', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const ratesFile = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'rates.json'), 'utf8'));
+
+  assert.equal(ratesFile.base, 'SGD');
+  assert.equal(ratesFile.rates.SGD, 1);
+  assert.ok(ratesFile.rates.USD > 0);
+
+  let state = Store.createEmptyState();
+  state = Store.updateFxRates(state, { SGD: 1, USD: 0.75, EUR: 0.7, JPY: 115 }, 'live', '2026-11-19');
+
+  assert.equal(Store.convertAmount(100, 'SGD', 'USD', state.settings.fxRates), 75);
+  assert.equal(Store.convertAmount(75, 'USD', 'SGD', state.settings.fxRates), 100);
+  assert.equal(Store.convertAmount(100, 'SGD', 'SGD', state.settings.fxRates), 100);
+  assert.equal(Store.convertAmount(100, 'SGD', 'JPY', state.settings.fxRates), 11500);
+
+  const restored = Store.normalizeState(JSON.parse(JSON.stringify(state)));
+  assert.equal(restored.settings.fxSource, 'live');
+  assert.equal(restored.settings.fxRates.USD, 0.75);
+});
+
 let passed = 0;
 for (const t of tests) {
   try {

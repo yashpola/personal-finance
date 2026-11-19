@@ -147,6 +147,13 @@ body {
   flex-wrap: wrap;
 }
 
+.currency-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 /* Balance Hero */
 .balance-hero {
   background: var(--surface);

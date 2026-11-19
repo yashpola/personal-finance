@@ -1,0 +1,15 @@
+{
+  "base": "SGD",
+  "updatedAt": "2026-11-19",
+  "source": "static",
+  "rates": {
+    "SGD": 1,
+    "USD": 0.746,
+    "EUR": 0.692,
+    "GBP": 0.585,
+    "INR": 63.15,
+    "CAD": 1.042,
+    "AUD": 1.145,
+    "JPY": 114.8
+  }
+}

@@ -20,8 +20,14 @@
       </div>
 
       <div class="topbar-actions">
-        <label class="sr-only" for="currency-select">Currency</label>
-        <select id="currency-select" class="select-compact" aria-label="Currency"></select>
+        <div class="currency-group">
+          <label class="sr-only" for="currency-select">Currency</label>
+          <select id="currency-select" class="select-compact" aria-label="Currency"></select>
+          <span id="fx-rate-badge" class="pill-badge tabular-nums hidden"></span>
+          <button type="button" id="refresh-fx-btn" class="btn btn-ghost btn-xs" title="Fetch live exchange rates">
+            ↻ FX
+          </button>
+        </div>
 
         <button type="button" id="open-data-dialog" class="btn btn-secondary btn-sm">
           Data &amp; Backup
