@@ -859,14 +859,23 @@
       const curTotal = Store.getStockTotal(stock);
       const costTotal = Store.getStockCostBasis(stock);
       const gain = Store.roundMoney(curTotal - costTotal);
-      let sharesText = `${formatShares(stock.shares)} ${stock.shares === 1 ? 'share' : 'shares'} @ ${formatMoney(stock.pricePerShare)}`;
-      if (stock.buyPrice !== null && stock.buyPrice !== undefined && gain !== 0) {
-        const gainPct = costTotal > 0 ? Math.round((gain / costTotal) * 1000) / 10 : 0;
-        sharesText += ` • ${formatSignedMoney(gain)} (${gain > 0 ? '+' : ''}${gainPct}%)`;
-      }
+      const sharesText = `${formatShares(stock.shares)} ${stock.shares === 1 ? 'share' : 'shares'} @ ${formatMoney(stock.pricePerShare)}`;
 
       main.appendChild(titleLine);
       main.appendChild(el('div', 'item-meta tabular-nums', sharesText));
+
+      if (stock.buyPrice !== null && stock.buyPrice !== undefined) {
+        const gainPct = costTotal > 0 ? Math.round((gain / costTotal) * 1000) / 10 : 0;
+        const gainClass = gain > 0
+          ? 'item-meta gain-positive tabular-nums'
+          : gain < 0
+            ? 'item-meta gain-negative tabular-nums'
+            : 'item-meta muted tabular-nums';
+        const gainLabel = gain === 0
+          ? 'At cost basis'
+          : `${gain > 0 ? 'Gain' : 'Loss'}: ${formatSignedMoney(gain)} (${gain > 0 ? '+' : ''}${gainPct}%)`;
+        main.appendChild(el('div', gainClass, gainLabel));
+      }
 
       const right = el('div', 'item-right');
       right.appendChild(el('span', 'item-amount tabular-nums', formatMoney(curTotal)));
