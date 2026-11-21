@@ -659,6 +659,19 @@
     }
   }
 
+  function formatGainLoss(gain, costTotal, zeroLabel) {
+    const gainPct = costTotal > 0 ? Math.round((gain / costTotal) * 1000) / 10 : 0;
+    const statusClass = gain > 0
+      ? 'gain-positive tabular-nums'
+      : gain < 0
+        ? 'gain-negative tabular-nums'
+        : 'muted tabular-nums';
+    const text = gain === 0
+      ? (zeroLabel || 'At cost basis')
+      : `${gain > 0 ? 'Gain' : 'Loss'}: ${formatSignedMoney(gain)} (${gain > 0 ? '+' : ''}${gainPct}%)`;
+    return { statusClass, text };
+  }
+
   function renderEtfsList() {
     const list = $('etfs-list');
     list.textContent = '';
@@ -674,7 +687,6 @@
       const cost = Store.getEtfTotal(etf);
       const currentVal = Store.getEtfCurrentValue(etf);
       const gain = Store.roundMoney(currentVal - cost);
-      const gainPct = cost > 0 ? Math.round((gain / cost) * 1000) / 10 : 0;
 
       const left = el('div', 'item-main');
       const titleLine = el('div', 'item-title-line', etf.name);
@@ -711,11 +723,8 @@
       card.appendChild(header);
 
       const valRow = el('div', 'etf-value-row');
-      const gainSpan = el(
-        'span',
-        gain > 0 ? 'gain-positive tabular-nums' : gain < 0 ? 'gain-negative tabular-nums' : 'muted tabular-nums',
-        gain === 0 ? 'Market value = Invested' : `Gain: ${formatSignedMoney(gain)} (${gain > 0 ? '+' : ''}${gainPct}%)`
-      );
+      const { statusClass, text: gainText } = formatGainLoss(gain, cost, 'Market value = Invested');
+      const gainSpan = el('span', statusClass, gainText);
       const valForm = el('form', 'etf-value-form');
       const valInput = el('input');
       valInput.type = 'number';
@@ -865,16 +874,8 @@
       main.appendChild(el('div', 'item-meta tabular-nums', sharesText));
 
       if (stock.buyPrice !== null && stock.buyPrice !== undefined) {
-        const gainPct = costTotal > 0 ? Math.round((gain / costTotal) * 1000) / 10 : 0;
-        const gainClass = gain > 0
-          ? 'item-meta gain-positive tabular-nums'
-          : gain < 0
-            ? 'item-meta gain-negative tabular-nums'
-            : 'item-meta muted tabular-nums';
-        const gainLabel = gain === 0
-          ? 'At cost basis'
-          : `${gain > 0 ? 'Gain' : 'Loss'}: ${formatSignedMoney(gain)} (${gain > 0 ? '+' : ''}${gainPct}%)`;
-        main.appendChild(el('div', gainClass, gainLabel));
+        const { statusClass, text: gainLabel } = formatGainLoss(gain, costTotal, 'At cost basis');
+        main.appendChild(el('div', `item-meta ${statusClass}`, gainLabel));
       }
 
       const right = el('div', 'item-right');
