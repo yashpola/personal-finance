@@ -857,29 +857,23 @@
     }
 
     for (const stock of state.investments.stocks) {
-      const row = el('div', 'item-row');
-      const main = el('div', 'item-main');
-
-      const titleLine = el('div', 'item-title-line', stock.company);
-      if (stock.ticker) {
-        titleLine.appendChild(el('span', 'pill-badge', stock.ticker));
-      }
+      const card = el('div', 'stock-card');
 
       const curTotal = Store.getStockTotal(stock);
       const costTotal = Store.getStockCostBasis(stock);
       const gain = Store.roundMoney(curTotal - costTotal);
       const sharesText = `${formatShares(stock.shares)} ${stock.shares === 1 ? 'share' : 'shares'} @ ${formatMoney(stock.pricePerShare)}`;
 
-      main.appendChild(titleLine);
-      main.appendChild(el('div', 'item-meta tabular-nums', sharesText));
-
-      if (stock.buyPrice !== null && stock.buyPrice !== undefined) {
-        const { statusClass, text: gainLabel } = formatGainLoss(gain, costTotal, 'At cost basis');
-        main.appendChild(el('div', `item-meta ${statusClass}`, gainLabel));
+      const topRow = el('div', 'stock-card-top');
+      const titleLine = el('div', 'item-title-line', stock.company);
+      if (stock.ticker) {
+        titleLine.appendChild(el('span', 'pill-badge', stock.ticker));
       }
+      topRow.appendChild(titleLine);
+      topRow.appendChild(el('span', 'item-amount tabular-nums', formatMoney(curTotal)));
 
-      const right = el('div', 'item-right');
-      right.appendChild(el('span', 'item-amount tabular-nums', formatMoney(curTotal)));
+      const metaRow = el('div', 'stock-card-meta');
+      metaRow.appendChild(el('span', 'item-meta tabular-nums', sharesText));
 
       const actions = el('div', 'item-actions');
       const editBtn = el('button', 'btn btn-ghost btn-xs', 'Edit');
@@ -906,11 +900,20 @@
       actions.appendChild(editBtn);
       actions.appendChild(sellBtn);
       actions.appendChild(delBtn);
-      right.appendChild(actions);
+      metaRow.appendChild(actions);
 
-      row.appendChild(main);
-      row.appendChild(right);
-      list.appendChild(row);
+      card.appendChild(topRow);
+      card.appendChild(metaRow);
+
+      if (stock.buyPrice !== null && stock.buyPrice !== undefined) {
+        const footer = el('div', 'stock-card-footer');
+        const { statusClass, text: gainLabel } = formatGainLoss(gain, costTotal, 'At cost basis');
+        footer.appendChild(el('span', statusClass, gainLabel));
+        footer.appendChild(el('span', 'muted tabular-nums', `Cost ${formatMoney(costTotal)}`));
+        card.appendChild(footer);
+      }
+
+      list.appendChild(card);
     }
   }
 

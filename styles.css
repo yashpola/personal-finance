@@ -1061,7 +1061,8 @@ select:focus {
   font-size: 0.85rem;
 }
 
-.etf-value-row {
+.etf-value-row,
+.stock-card-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1072,6 +1073,24 @@ select:focus {
   padding: 6px 8px;
   border-radius: 6px;
   background: var(--surface-subtle);
+}
+
+.stock-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 11px 12px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stock-card-top,
+.stock-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .etf-value-form {
